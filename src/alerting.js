@@ -41,6 +41,6 @@ export function createAlerter({ tg, chatId, threadId, logBuffer, throttleMs = 5 
     ]
       .filter(Boolean)
       .join('\n');
-    tg.sendMessage(chatId, text, { threadId: threadId || undefined }).catch(() => {});
+    tg.sendMessage(chatId, text, { threadId: threadId || undefined }).catch((e) => log?.('alert send failed', e));
   };
 }
