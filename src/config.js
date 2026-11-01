@@ -53,5 +53,5 @@ export const config = {
   requestsChatThreadId: (env('REQUESTS_CHAT_ID', '').split('/')[1] || '').trim(),
   pollTimeoutSec: Number(env('TG_POLL_TIMEOUT_SEC', '30')),
   queueLimitPerType: Number(env('QUEUE_LIMIT_PER_TYPE', '3')),
-  typeThresholds: { Стройка: 7, Исследование: 1 },
+  typeThresholds: { Стройка: 10, Исследование: 15 },
 };

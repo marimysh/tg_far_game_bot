@@ -489,6 +489,23 @@ async function main() {
   }
 
   {
+    // help показывает актуальные пороги чата (resolveChat), обновляются без рестарта
+    const sheets = new FakeSheets(SEED.map((r) => [...r]));
+    const tg = new FakeTg();
+    const { bot, chats } = makeCtx({ sheets, store, tg });
+
+    await bot.handleUpdate(msg('/farhelp'));
+    check('help shows current thresholds', tg.last().body.text.includes('до 7 дн.') && tg.last().body.text.includes('до 1 дн.'));
+
+    chats.set('-100', 70, { spreadsheetId: 'default', title: 'test', allowed: true, thresholds: { Стройка: 10, Исследование: 15 } });
+    await bot.handleUpdate(msg('/farhelp'));
+    check('help reflects changed thresholds', tg.last().body.text.includes('до 10 дн.') && tg.last().body.text.includes('до 15 дн.'));
+
+    await bot.handleUpdate(msg('/farhelp', 1, -999));
+    check('unknown chat help shows defaults', tg.last().body.text.includes('до 7 дн.') || tg.last().body.text.includes('до 10 дн.'));
+  }
+
+  {
     // REQUESTS_CHAT_ID: карточки заявок и ссылки на таблицы идут туда, а не в ADMIN_CHAT_ID
     const sheets = new FakeSheets(SEED.map((r) => [...r]));
     const tg = new FakeTg();
