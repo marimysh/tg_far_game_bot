@@ -54,6 +54,31 @@ export class SheetsClient {
     return data.values ?? [];
   }
 
+  // Создаёт новую таблицу (падает в Drive владельца OAuth-токена).
+  // Статик: эндпоинт /spreadsheets не привязан к id существующей таблицы.
+  static async create(auth, title) {
+    const tmp = new SheetsClient(auth, '');
+    const res = await fetch(`${SHEETS_API}`, {
+      method: 'POST',
+      headers: { authorization: `Bearer ${await tmp.token()}`, 'content-type': 'application/json' },
+      body: JSON.stringify({ properties: { title } }),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      throw new Error(`Sheets create failed: HTTP ${res.status} ${JSON.stringify(data).slice(0, 300)}`);
+    }
+    return { spreadsheetId: data.spreadsheetId, url: data.spreadsheetUrl };
+  }
+
+  // Переименовывает первый лист (sheetId 0) таблицы.
+  // Внимание: эндпоинт batchUpdate — с двоеточием: /spreadsheets/{id}:batchUpdate
+  async renameFirstSheet(title) {
+    return this.api(':batchUpdate', {
+      method: 'POST',
+      body: { requests: [{ updateSheetProperties: { properties: { sheetId: 0, title }, fields: 'title' } }] },
+    });
+  }
+
   async updateValues(range, values) {
     const path = `/values/${encodeURIComponent(range)}`;
     return this.api(path, {

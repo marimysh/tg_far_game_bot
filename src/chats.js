@@ -18,7 +18,7 @@ export function createChatsStore(file) {
     }
   }
 
-  const key = (chatId, threadId) => `${chatId}_${threadId ?? 'none'}`;
+  const key = (chatId, threadId) => `${chatId}_${threadId || 'none'}`;
 
   return {
     key,

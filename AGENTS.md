@@ -20,7 +20,9 @@ Telegram-бот очереди «FAR Помощь» для игрового со
 ```
 src/config.js   загрузка .env
 src/tg.js       клиент Bot API: getUpdates-цикл, sendMessage/editMessageText/answerCallbackQuery
-src/sheets.js   клиент Google Sheets API: OAuth refresh, values get/append/update
+src/sheets.js   клиент Google Sheets API: OAuth refresh, values get/append/update,
+                создание таблиц (SheetsClient.create) и rename листа
+src/translit.js транслитерация названий групп для имён таблиц (far_<latin>)
 src/state.js    FSM-хранилище в JSON-файле (атомарная запись, TTL состояний 24 ч)
 src/queue.js    доменная логика: маппинг строк по ИМЕНАМ колонок из шапки листа,
                 actualRows(), appendRequest() (id пишется формулой =ROW()), updateRow()
@@ -29,7 +31,7 @@ src/chats.js    реестр привязок топиков к таблицам
 src/bot.js      роутинг команд и конечный автомат (FSM) диалогов + клавиатуры
 src/digest.js   дайджест очереди: поллинг таблицы, отправка при изменении хеша
 src/index.js    сборка, логирование, alertAdmin, точка входа
-tests/          фейковые клиенты + сценарии (33 проверки)
+tests/          фейковые клиенты + сценарии (86 проверок)
 scripts/        make-test-sheet.js — создание тестовой копии таблицы
 deploy/         systemd unit (шаблон: поправьте пользователя и пути под хост)
 ```
@@ -48,7 +50,9 @@ deploy/         systemd unit (шаблон: поправьте пользова�
 
 - Ввод дней в `/farupdate` валидируется на число (раньше записывался любой текст).
 - Команда, присланная в середине диалога, считается ответом текущего шага, а не исполняется параллельно с ним.
-- Пустой дайджест не отправляется; сообщения из неразрешённых чатов игнорируются молча.
+- Пустой дайджест не отправляется.
+- Неизвестный (не подключённый) чат: молча игнорируется, кроме `/start` (заявка на подключение с кнопками allow/deny в админ-чате) и `/farhelp`.
+- Callback-запросы гейтятся по ALLOWED_TOPICS + всегда разрешены из админ-чата (ADMIN_CHAT_ID); обычные сообщения гейтингом не отбрасываются — решение принимает handleMessage.
 
 ## Деплой
 

@@ -85,6 +85,10 @@ export function createQueue({ sheets, sheetName, typeThresholds }) {
     return rows.find((r) => String(r['Ник']) === nick && String(r['Тип']) === type);
   }
 
+  function findById(rows, id) {
+    return rows.find((r) => Number(r['id']) === Number(id));
+  }
+
   async function appendRequest({ nick, type, days, thresholds }) {
     const idx = await headerIndex();
     const now = new Date();
@@ -117,5 +121,5 @@ export function createQueue({ sheets, sheetName, typeThresholds }) {
     await sheets.updateValues(range, [cells]);
   }
 
-  return { readQueue, actualRows, findByNickType, appendRequest, updateRow };
+  return { readQueue, actualRows, findByNickType, findById, appendRequest, updateRow };
 }

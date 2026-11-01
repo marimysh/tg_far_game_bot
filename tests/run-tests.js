@@ -4,6 +4,7 @@ import { createBot } from '../src/bot.js';
 import { buildDigestText } from '../src/digest.js';
 import { createLogBuffer, createAlerter } from '../src/alerting.js';
 import { createChatsStore } from '../src/chats.js';
+import { translit, sheetNameForChat } from '../src/translit.js';
 
 // Реальный порядок колонок листа «Полный список»
 const HEADER = ['id', 'Дата', 'Ник', 'Тип', 'Осталось дней', 'Изначально', 'Порог в днях', 'Статус', 'Время добавления', 'Время обновления'];
@@ -71,7 +72,7 @@ const SEED = [
   [4, '30.10.2026', 'Closed', 'Стройка', 9, 9, 7, 'Готово (снято)', '2026-10-30T10:00:00.000Z', '2026-10-30T10:00:00.000Z'],
 ];
 
-function makeCtx({ sheets, store, tg, allowedTopics = ['-100_70'], chats, thresholds }) {
+function makeCtx({ sheets, store, tg, allowedTopics = ['-100_70'], chats, thresholds, createChatSheet }) {
   const queueApi = createQueue({ sheets, sheetName: 'Полный список', typeThresholds: { Стройка: 7, Исследование: 1 } });
   const chatsStore =
     chats ??
@@ -90,16 +91,43 @@ function makeCtx({ sheets, store, tg, allowedTopics = ['-100_70'], chats, thresh
     allowedTopics,
     spreadsheetId: 'default',
     typeThresholds: { Стройка: 7, Исследование: 1 },
+    adminChatId: '-5',
+    adminChatThreadId: '3',
   };
-  const bot = createBot({ tg, getQueueApi: () => queueApi, chats: chatsStore, store, config, log: () => {} });
-  return { bot, queueApi, chats: chatsStore };
+  const sheetCalls = [];
+  const createSheetFn =
+    createChatSheet ??
+    (async (name) => {
+      sheetCalls.push(name);
+      return { spreadsheetId: `new-sheet-${sheetCalls.length}`, url: `https://docs.google.com/${name}` };
+    });
+  const bot = createBot({
+    tg,
+    getQueueApi: () => queueApi,
+    chats: chatsStore,
+    store,
+    config,
+    log: () => {},
+    createChatSheet: createSheetFn,
+  });
+  return { bot, queueApi, chats: chatsStore, sheetCalls };
 }
 
-const msg = (text, threadId = 70) => ({
-  message: { message_id: 1, chat: { id: -100 }, message_thread_id: threadId, text, from: { id: 42 } },
+const msg = (text, threadId = 70, chatId = -100, title) => ({
+  message: {
+    message_id: 1,
+    chat: { id: chatId, ...(title ? { title } : {}) },
+    message_thread_id: threadId,
+    text,
+    from: { id: 42 },
+  },
 });
 const cbq = (data, messageId = 50) => ({
   callback_query: { id: 'q1', data, from: { id: 42 }, message: { message_id: messageId, chat: { id: -100 }, message_thread_id: 70 } },
+});
+// callback из админ-чата (не входит в allowedTopics — гейтинг обходится для админ-чата)
+const adminCbq = (data, messageId = 99) => ({
+  callback_query: { id: 'a1', data, from: { id: 7 }, message: { message_id: messageId, chat: { id: -5 }, message_thread_id: 3 } },
 });
 
 let passed = 0;
@@ -166,9 +194,14 @@ async function main() {
 
     await bot.handleUpdate(msg('/farupdate'));
     const kb = JSON.stringify(tg.last().body.keyboard);
-    check('update keyboard', kb.includes('update_Alice - Стройка') && kb.includes('update_Bob - Исследование') && !kb.includes('Closed'));
+    check(
+      'update keyboard',
+      kb.includes('{"text":"Alice - Стройка","callback_data":"update_2"}') &&
+        kb.includes('{"text":"Bob - Исследование","callback_data":"update_3"}') &&
+        !kb.includes('Closed'),
+    );
 
-    await bot.handleUpdate(cbq('update_Alice - Стройка'));
+    await bot.handleUpdate(cbq('update_2'));
     check('update ask value', tg.last().body.text === 'Введите новое значение в днях для Alice - Стройка');
     check('update state', store.get('-100', 70).state === 'expect_new_time');
 
@@ -189,7 +222,7 @@ async function main() {
     const { bot } = makeCtx({ sheets, store, tg });
 
     await bot.handleUpdate(msg('/farupdate'));
-    await bot.handleUpdate(cbq('update_Alice - Стройка'));
+    await bot.handleUpdate(cbq('update_2'));
     await bot.handleUpdate(msg('5'));
     const row = sheets.rows[0];
     check('below threshold closes', row[7] === 'Готово' && row[4] === 5);
@@ -202,9 +235,9 @@ async function main() {
     const { bot } = makeCtx({ sheets, store, tg });
 
     await bot.handleUpdate(msg('/farready'));
-    check('ready keyboard', JSON.stringify(tg.last().body.keyboard).includes('ready_Alice - Стройка'));
+    check('ready keyboard', JSON.stringify(tg.last().body.keyboard).includes('ready_2'));
 
-    await bot.handleUpdate(cbq('ready_Alice - Стройка'));
+    await bot.handleUpdate(cbq('ready_2'));
     check('ready closes row', sheets.rows[0][7] === 'Готово' && sheets.rows[0][9] !== '2026-10-28T10:00:00.000Z');
     check('ready message', tg.last().body.text === 'Заявка выполнена: Alice');
   }
@@ -215,9 +248,11 @@ async function main() {
     const { bot } = makeCtx({ sheets, store, tg });
 
     await bot.handleUpdate(msg('/farcancel'));
-    check('cancel keyboard', JSON.stringify(tg.last().body.keyboard).includes('cancel_Bob - Исследование'));
+    const cancelKb = tg.last().body.keyboard;
+    check('cancel keyboard', JSON.stringify(cancelKb).includes('cancel_3'));
+    check('cancel callbacks within 64 bytes', cancelKb.flat().every((b) => Buffer.byteLength(String(b.callback_data)) <= 64));
 
-    await bot.handleUpdate(cbq('cancel_Bob - Исследование'));
+    await bot.handleUpdate(cbq('cancel_3'));
     check('cancel closes row', sheets.rows[1][7] === 'Отменено' && sheets.rows[1][9] !== '2026-10-29T10:00:00.000Z');
     check('cancel message', tg.last().body.text === 'Заявка отменена: Bob');
   }
@@ -235,12 +270,15 @@ async function main() {
   }
 
   {
+    // неизвестный чат: /farhelp — отвечаем, прочие команды — тихо
     const sheets = new FakeSheets(SEED.map((r) => [...r]));
     const tg = new FakeTg();
     const { bot } = makeCtx({ sheets, store, tg });
-    await bot.handleUpdate({ message: { message_id: 1, chat: { id: -999 }, message_thread_id: 1, text: '/farhelp' } });
-    check('foreign chat ignored', tg.calls.length === 0);
-    check('foreign chat no state', store.get('-999', 1).state === 'expect_command');
+    await bot.handleUpdate(msg('/farhelp', 1, -999));
+    check('unknown chat help answered', tg.texts().some((t) => t.includes('маяками')));
+    await bot.handleUpdate(msg('/farupdate', 1, -999));
+    check('unknown chat command ignored', tg.texts().filter((t) => t.includes('маяками')).length === 1);
+    check('unknown chat help sets finish state', store.get('-999', 1).state === 'finish_command');
   }
 
   {
@@ -275,8 +313,8 @@ async function main() {
     const actual = queueApi.actualRows(await queueApi.readQueue());
     check('reordered header: actual rows', actual.length === 2, JSON.stringify(actual.map((r) => r['Ник'])));
     await bot.handleUpdate(msg('/farcancel'));
-    check('reordered header: keyboard', JSON.stringify(tg.last().body.keyboard).includes('cancel_Alice - Стройка'));
-    await bot.handleUpdate(cbq('cancel_Alice - Стройка'));
+    check('reordered header: keyboard', JSON.stringify(tg.last().body.keyboard).includes('cancel_2'));
+    await bot.handleUpdate(cbq('cancel_2'));
     const closed = sheets.rows.find((r) => r[byName['Ник']] === 'Alice');
     check('reordered header: close by name', closed[byName['Статус']] === 'Отменено');
   }
@@ -370,9 +408,10 @@ async function main() {
   }
 
   {
-    // реестр: seed только в пустой, персистентность через файл
+    // реестр: seed только в пустой, персистентность через файл, нормализация ключа ('' == undefined)
     const f = `/tmp/far-bot-chats-persist-${Date.now()}.json`;
     const c1 = createChatsStore(f);
+    check('key normalizes empty thread', c1.key('-1', '') === c1.key('-1', undefined) && c1.key('-1', undefined) === '-1_none');
     check('seedIfEmpty fills empty', c1.seedIfEmpty([{ key: 'k1', chatId: '-1', spreadsheetId: 's1', allowed: true }]) === true);
     check('seedIfEmpty skips non-empty', c1.seedIfEmpty([{ key: 'k2', chatId: '-2', spreadsheetId: 's2', allowed: true }]) === false);
     check('seedIfEmpty one entry', c1.all().length === 1);
@@ -381,6 +420,71 @@ async function main() {
     c1.close();
     const c2 = createChatsStore(f);
     check('registry persists across instances', c2.all().length === 2 && c2.get('-2', 5).spreadsheetId === 's2' && c2.get('-2', 5).thresholds['Стройка'] === 3);
+  }
+
+  {
+    // транслитерация
+    check('translit cyrillic', translit('FAR Помощь') === 'far_pomosch', translit('FAR Помощь'));
+    check('sheet name for chat', sheetNameForChat('FAR Помощь', '-777') === 'far_far_pomosch', sheetNameForChat('FAR Помощь', '-777'));
+    check('sheet name fallback', sheetNameForChat('', '-777') === 'far_chat_m777', sheetNameForChat('', '-777'));
+  }
+
+  {
+    // approval-flow: /start в неизвестном чате -> заявка админу; чужие команды игнор
+    const sheets = new FakeSheets(SEED.map((r) => [...r]));
+    const tg = new FakeTg();
+    const { bot, chats, sheetCalls } = makeCtx({ sheets, store, tg });
+
+    await bot.handleUpdate(msg('/farcreate', null, -777, 'FAR Помощь'));
+    check('unknown chat ignores commands', tg.calls.length === 0);
+
+    await bot.handleUpdate(msg('/start', null, -777, 'FAR Помощь'));
+    check('start replies to requester', tg.texts().some((t) => t.includes('Отправлен запрос на добавление')));
+    const adminCall = tg.calls.find((c) => c.method === 'sendMessage' && c.body.chatId === '-5');
+    check('admin notified', Boolean(adminCall) && adminCall.body.threadId === '3');
+    check(
+      'admin keyboard allow/deny',
+      JSON.stringify(adminCall.body.keyboard).includes('allow_-777_none') && JSON.stringify(adminCall.body.keyboard).includes('deny_-777_none'),
+    );
+    check('pending record stored', chats.get('-777', undefined)?.pending === true && chats.get('-777', undefined)?.allowed === false);
+
+    // allow
+    const before = tg.calls.length;
+    await bot.handleUpdate(adminCbq('allow_-777_none'));
+    check('sheet created via translit name', sheetCalls[0] === 'far_far_pomosch', JSON.stringify(sheetCalls));
+    check('mapping allowed after approve', chats.get('-777', undefined)?.allowed === true && chats.get('-777', undefined)?.spreadsheetId === 'new-sheet-1');
+    check('mapping has chatId for digest', chats.get('-777', undefined)?.chatId === '-777');
+    const adminNotice = tg.calls.find((c) => c.method === 'sendMessage' && c.body.chatId === '-5' && c.body.text.includes('Таблица очереди'));
+    check('sheet link goes to admin chat', Boolean(adminNotice) && adminNotice.body.text.includes('https://docs.google.com/') && adminNotice.body.threadId === '3');
+    const requesterNotice = tg.calls.find((c) => c.method === 'sendMessage' && c.body.chatId === '-777' && c.body.text.includes('подключён'));
+    check('requester gets short confirm without link', Boolean(requesterNotice) && !requesterNotice.body.text.includes('docs.google.com'));
+
+    // после подключения чат "известный": команды работают
+    await bot.handleUpdate(msg('/farhelp', null, -777));
+    check('known chat after approve', tg.calls.length > before && tg.texts().some((t) => t.includes('маяками')));
+  }
+
+  {
+    // deny: отказ уходит в чат, маппинг остаётся закрытым
+    const sheets = new FakeSheets(SEED.map((r) => [...r]));
+    const tg = new FakeTg();
+    const { bot, chats, sheetCalls } = makeCtx({ sheets, store, tg });
+
+    await bot.handleUpdate(msg('/start', null, -888, 'Denied Group'));
+    await bot.handleUpdate(adminCbq('deny_-888_none'));
+    check('deny message to requester', tg.texts().some((t) => t === 'Вам отказано. Для более подробной информации свяжитесь с @Marimysh'));
+    check('deny keeps mapping closed', chats.get('-888', undefined)?.allowed === false && chats.get('-888', undefined)?.pending === false);
+    check('deny creates no sheet', sheetCalls.length === 0);
+  }
+
+  {
+    // admin callback работает даже если админ-чат не в allowedTopics (обход гейтинга)
+    const sheets = new FakeSheets(SEED.map((r) => [...r]));
+    const tg = new FakeTg();
+    const { bot, chats } = makeCtx({ sheets, store, tg, allowedTopics: ['-100_70'] });
+    await bot.handleUpdate(msg('/start', 5, -999, 'Another'));
+    await bot.handleUpdate(adminCbq('allow_-999_5'));
+    check('admin gate bypassed', chats.get('-999', 5)?.allowed === true);
   }
 
   store.close();
