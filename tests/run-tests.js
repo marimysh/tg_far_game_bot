@@ -286,6 +286,18 @@ async function main() {
     check('alert disabled without chatId', tg3.calls.length === 0);
   }
 
+  {
+    // Локаль листа форматирует >=1000 как "4 444" (NBSP) — парсер должен понимать
+    const rows = [
+      ['id', 'Дата', 'Ник', 'Тип', 'Осталось дней', 'Изначально', 'Порог в днях', 'Статус', 'Время добавления', 'Время обновления'],
+      ['2', '01.11.2026', 'Big', 'Стройка', '4 444', '10 000', '7', 'В очереди', '2026-11-01T10:00:00.000Z', '2026-11-01T10:00:00.000Z'],
+    ];
+    const sheets = new FakeSheets(rows.slice(1), rows[0]);
+    const queueApi = createQueue({ sheets, sheetName: 'Полный список', typeThresholds: { Стройка: 7, Исследование: 1 } });
+    const actual = queueApi.actualRows(await queueApi.readQueue());
+    check('num parsing: NBSP thousands separator', actual.length === 1 && actual[0]['Осталось дней'] === 4444 && actual[0]['Изначально'] === 10000);
+  }
+
   store.close();
   console.log(`\n${passed} passed, ${failed} failed`);
   process.exit(failed ? 1 : 0);

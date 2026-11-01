@@ -14,7 +14,9 @@ export const COLUMNS = [
 const NUMERIC = ['id', 'Изначально', 'Порог в днях', 'Осталось дней'];
 
 function toNum(v) {
-  const n = Number(String(v ?? '').replace(',', '.').trim());
+  // Google с USER_ENTERED форматирует >=1000 по локали листа ("4 444" с NBSP) —
+  // вырезаем все пробелы (включая неразрывный) до парсинга.
+  const n = Number(String(v ?? '').replace(/[\s ]/g, '').replace(',', '.').trim());
   return Number.isFinite(n) ? n : 0;
 }
 
