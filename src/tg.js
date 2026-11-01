@@ -59,6 +59,11 @@ export class TgClient {
     return this.call('answerCallbackQuery', { callback_query_id: id, text: '✅' });
   }
 
+  async getChatMember(chatId, userId) {
+    const res = await this.call('getChatMember', { chat_id: chatId, user_id: userId });
+    return res?.status ?? 'left';
+  }
+
   async deleteWebhook() {
     return this.call('deleteWebhook', { drop_pending_updates: false });
   }
