@@ -226,7 +226,7 @@ async function main() {
     check(
       'digest text',
       text ===
-        '<b>Стройка</b>\n\n<code>Alice</code> Осталось: 8 д из 10 д\n<b>Исследования</b>\n\n<code>Bob</code> Осталось: 5 д из 12 д',
+        '<b>Стройка</b>\n\n<code>Alice</code> Осталось: 8 д из 10 д\n\n<b>Исследования</b>\n\n<code>Bob</code> Осталось: 5 д из 12 д',
       JSON.stringify(text),
     );
 

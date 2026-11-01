@@ -7,7 +7,7 @@ export function buildDigestText(sortedActualRows) {
       return lines.length ? `<b>${type === 'Исследование' ? 'Исследования' : type}</b>\n\n${lines.join('\n')}` : null;
     })
     .filter(Boolean);
-  return sections.join('\n');
+  return sections.join('\n\n');
 }
 
 export function startDigest({ queueApi, tg, config, log }) {
