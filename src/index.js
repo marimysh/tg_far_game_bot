@@ -2,7 +2,7 @@ import { config } from './config.js';
 import { TgClient, pollLoop } from './tg.js';
 import { SheetsClient } from './sheets.js';
 import { StateStore } from './state.js';
-import { createQueue } from './queue.js';
+import { createQueue, COLUMNS, localISO, formatDateDDMMYYYY } from './queue.js';
 import { createBot } from './bot.js';
 import { startDigest } from './digest.js';
 import { createLogBuffer, createAlerter } from './alerting.js';
@@ -56,7 +56,23 @@ chats.seedIfEmpty(
 );
 chats.flush();
 
-const bot = createBot({ tg, getQueueApi, chats, store, config, log });
+// Создание таблицы для нового чата: файл + переименованный лист + шапка и 2 тестовые строки
+async function createChatSheet(name) {
+  const { spreadsheetId, url } = await SheetsClient.create(config.google, name);
+  const sheets = getSheets(spreadsheetId);
+  await sheets.renameFirstSheet(config.sheetName);
+  const now = localISO(new Date());
+  const today = formatDateDDMMYYYY(new Date());
+  const header = COLUMNS;
+  const rows = [
+    ['=ROW()', today, 'Тест Стройка', 'Стройка', 10, 10, config.typeThresholds['Стройка'] ?? 7, 'В очереди', now, now],
+    ['=ROW()', today, 'Тест Исследование', 'Исследование', 5, 5, config.typeThresholds['Исследование'] ?? 1, 'В очереди', now, now],
+  ];
+  await sheets.updateValues(`'${config.sheetName}'!A1:J${1 + rows.length}`, [header, ...rows]);
+  return { spreadsheetId, url };
+}
+
+const bot = createBot({ tg, getQueueApi, chats, store, config, log, createChatSheet });
 
 const alertAdmin = createAlerter({
   tg,
