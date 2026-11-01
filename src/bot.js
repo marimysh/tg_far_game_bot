@@ -2,7 +2,9 @@ const HELP_TEXT =
   'Это бот помощник \n\nСейчас он помогает в событии с маяками. Используйте функции:\n' +
   '• /farcreate - Добавить заявку\n' +
   '• /farupdate - Изменить оставшееся время\n' +
-  '• /fardelete - Удалить запрос не требующий помощи\n\n' +
+  '• /farready - Отметить заявку выполненной\n' +
+  '• /farcancel - Отменить заявку\n' +
+  '• /toptop - Кто первый в очереди по стройке и исследованиям\n\n' +
   'Правила:\nОтветственность будет полностью на Вас. Все в порядке живой очереди!\n' +
   '❌По просьбам и желанию самих игроков Мы просим говорить когда\n' +
   '• СТРОЙКА сократилась до 10 дней, \n• ИССЛЕДОВАНИЕ - до 15ти.\n' +
@@ -42,14 +44,24 @@ export function createBot({ tg, queueApi, store, config, log }) {
     store.set(ctx.chatId, ctx.threadId, 'expect_command', {});
   }
 
-  async function onFarDelete(ctx) {
+  async function onFarReady(ctx) {
     const queue = await queueApi.readQueue();
     const rows = queueApi.actualRows(queue);
-    await tg.sendMessage(ctx.chatId, '/fardelete - Удалить запрос не требующий помощи', {
+    await tg.sendMessage(ctx.chatId, '/farready - Отметить заявку выполненной', {
       threadId: ctx.threadId,
-      keyboard: usersKeyboard(rows, 'delete'),
+      keyboard: usersKeyboard(rows, 'ready'),
     });
-    store.set(ctx.chatId, ctx.threadId, 'expect_command_delete', {});
+    store.set(ctx.chatId, ctx.threadId, 'expect_command_ready', {});
+  }
+
+  async function onFarCancel(ctx) {
+    const queue = await queueApi.readQueue();
+    const rows = queueApi.actualRows(queue);
+    await tg.sendMessage(ctx.chatId, '/farcancel - Отменить заявку', {
+      threadId: ctx.threadId,
+      keyboard: usersKeyboard(rows, 'cancel'),
+    });
+    store.set(ctx.chatId, ctx.threadId, 'expect_command_cancel', {});
   }
 
   async function onFarCreate(ctx) {
@@ -94,14 +106,18 @@ export function createBot({ tg, queueApi, store, config, log }) {
       store.set(ctx.chatId, ctx.threadId, 'expect_new_time', st.data);
       return;
     }
+    const days = Number(text);
     const queue = await queueApi.readQueue();
     const row = queueApi.findByNickType(queueApi.actualRows(queue), st.data.nick, st.data.type);
     if (row) {
-      await queueApi.updateRow(row, {
-        'Осталось дней': Number(text),
-        'Время обновления': localISO(new Date()),
-      });
-      await tg.sendMessage(ctx.chatId, 'Оставшееся время обновлено', { threadId: ctx.threadId });
+      const patch = { 'Осталось дней': days, 'Время обновления': localISO(new Date()) };
+      let reply = 'Оставшееся время обновлено';
+      if (days < Number(row['Порог в днях'])) {
+        patch['Статус'] = 'Готово';
+        reply = `Осталось ${days} дн. — меньше порога (${row['Порог в днях']} дн.). Заявка закрыта со статусом «Готово»`;
+      }
+      await queueApi.updateRow(row, patch);
+      await tg.sendMessage(ctx.chatId, reply, { threadId: ctx.threadId });
     } else {
       await tg.sendMessage(ctx.chatId, 'Запись не найдена или уже закрыта', { threadId: ctx.threadId });
     }
@@ -122,6 +138,16 @@ export function createBot({ tg, queueApi, store, config, log }) {
       return;
     }
     const days = Number(text.replace(',', '.'));
+    const minDays = Number(config.typeThresholds[st.data.type] ?? 1);
+    if (days < minDays) {
+      await tg.sendMessage(
+        ctx.chatId,
+        `Для «${st.data.type}» принимаются заявки от ${minDays} дн. и больше. Введите число заново`,
+        { threadId: ctx.threadId },
+      );
+      store.set(ctx.chatId, ctx.threadId, 'except_create_count', st.data);
+      return;
+    }
     await queueApi.appendRequest({ nick: st.data.nick, type: st.data.type, days });
     await tg.sendMessage(ctx.chatId, 'Ваш запрос добавлен. Ожидайте обновления и помощи', { threadId: ctx.threadId });
     store.set(ctx.chatId, ctx.threadId, 'finish_command', {});
@@ -135,7 +161,8 @@ export function createBot({ tg, queueApi, store, config, log }) {
 
     const text = String(ctx.text ?? '').trim();
     if (text.startsWith('/farupdate')) return onFarUpdate(ctx);
-    if (text.startsWith('/fardelete')) return onFarDelete(ctx);
+    if (text.startsWith('/farready')) return onFarReady(ctx);
+    if (text.startsWith('/farcancel')) return onFarCancel(ctx);
     if (text.startsWith('/farcreate')) return onFarCreate(ctx);
     if (text.startsWith('/toptop')) return onTopTop(ctx);
     if (text.startsWith('/farhelp')) return onHelp(ctx);
@@ -153,15 +180,28 @@ export function createBot({ tg, queueApi, store, config, log }) {
       return;
     }
 
-    if (data.split('_')[0] === 'delete') {
-      const actionId = data.substring('delete_'.length);
+    if (data.split('_')[0] === 'ready') {
+      const actionId = data.substring('ready_'.length);
       const [nick, , type] = actionId.split(' ');
       const queue = await queueApi.readQueue();
       const row = queueApi.findByNickType(queueApi.actualRows(queue), nick, type);
       if (row) {
-        await queueApi.updateRow(row, { 'Статус': 'Готово (снято)', 'Время обновления': localISO(new Date()) });
+        await queueApi.updateRow(row, { 'Статус': 'Готово', 'Время обновления': localISO(new Date()) });
       }
-      await tg.editMessageText(ctx.chatId, ctx.messageId, `Статус сменен на "готово" у ${nick}`);
+      await tg.editMessageText(ctx.chatId, ctx.messageId, `Заявка выполнена: ${nick}`);
+      store.set(ctx.chatId, ctx.threadId, 'finish_command', {});
+      return;
+    }
+
+    if (data.split('_')[0] === 'cancel') {
+      const actionId = data.substring('cancel_'.length);
+      const [nick, , type] = actionId.split(' ');
+      const queue = await queueApi.readQueue();
+      const row = queueApi.findByNickType(queueApi.actualRows(queue), nick, type);
+      if (row) {
+        await queueApi.updateRow(row, { 'Статус': 'Отменено', 'Время обновления': localISO(new Date()) });
+      }
+      await tg.editMessageText(ctx.chatId, ctx.messageId, `Заявка отменена: ${nick}`);
       store.set(ctx.chatId, ctx.threadId, 'finish_command', {});
       return;
     }

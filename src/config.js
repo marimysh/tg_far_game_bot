@@ -40,7 +40,7 @@ export const config = {
   digest: {
     chatId: env('DIGEST_CHAT_ID', ''),
     threadId: env('DIGEST_THREAD_ID', ''),
-    pollSec: Number(env('DIGEST_POLL_SEC', '60')),
+    pollSec: Number(env('DIGEST_POLL_SEC', '15')),
   },
   stateFile: env('STATE_FILE', resolve(process.cwd(), 'state.json')),
   adminChatId: env('ADMIN_CHAT_ID', ''),

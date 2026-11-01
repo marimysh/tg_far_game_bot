@@ -1,12 +1,12 @@
 export function buildDigestText(sortedActualRows) {
-  const lines = (type) =>
-    sortedActualRows
-      .filter((r) => r['Тип'] === type)
-      .map((r) => `<code>${r['Ник']}</code> Осталось: ${r['Осталось дней']} д из ${r['Изначально']} д`);
-  const sections = [
-    '<b>Стройка</b>\n\n' + lines('Стройка').join('\n'),
-    '<b>Исследования</b>\n\n' + lines('Исследование').join('\n'),
-  ];
+  const sections = ['Стройка', 'Исследование']
+    .map((type) => {
+      const lines = sortedActualRows
+        .filter((r) => r['Тип'] === type)
+        .map((r) => `<code>${r['Ник']}</code> Осталось: ${r['Осталось дней']} д из ${r['Изначально']} д`);
+      return lines.length ? `<b>${type === 'Исследование' ? 'Исследования' : type}</b>\n\n${lines.join('\n')}` : null;
+    })
+    .filter(Boolean);
   return sections.join('\n');
 }
 
