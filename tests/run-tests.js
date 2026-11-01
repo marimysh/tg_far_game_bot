@@ -72,7 +72,7 @@ const SEED = [
   [4, '30.10.2026', 'Closed', 'Стройка', 9, 9, 7, 'Готово (снято)', '2026-10-30T10:00:00.000Z', '2026-10-30T10:00:00.000Z'],
 ];
 
-function makeCtx({ sheets, store, tg, allowedTopics = ['-100_70'], chats, thresholds, createChatSheet }) {
+function makeCtx({ sheets, store, tg, allowedTopics = ['-100_70'], chats, thresholds, createChatSheet, configExtra }) {
   const queueApi = createQueue({ sheets, sheetName: 'Полный список', typeThresholds: { Стройка: 7, Исследование: 1 } });
   const chatsStore =
     chats ??
@@ -93,6 +93,7 @@ function makeCtx({ sheets, store, tg, allowedTopics = ['-100_70'], chats, thresh
     typeThresholds: { Стройка: 7, Исследование: 1 },
     adminChatId: '-5',
     adminChatThreadId: '3',
+    ...configExtra,
   };
   const sheetCalls = [];
   const createSheetFn =
@@ -485,6 +486,25 @@ async function main() {
     await bot.handleUpdate(msg('/start', 5, -999, 'Another'));
     await bot.handleUpdate(adminCbq('allow_-999_5'));
     check('admin gate bypassed', chats.get('-999', 5)?.allowed === true);
+  }
+
+  {
+    // REQUESTS_CHAT_ID: карточки заявок и ссылки на таблицы идут туда, а не в ADMIN_CHAT_ID
+    const sheets = new FakeSheets(SEED.map((r) => [...r]));
+    const tg = new FakeTg();
+    // requests-чат = тот же chatId, что у админки, но другой топик (как на проде: -100…/655 vs /654)
+    const { bot } = makeCtx({ sheets, store, tg, configExtra: { requestsChatId: '-5', requestsChatThreadId: '655' } });
+
+    await bot.handleUpdate(msg('/start', null, -555, 'Requests Split'));
+    const requestCard = tg.calls.find((c) => c.method === 'sendMessage' && c.body.text.includes('Новый запрос на подключение'));
+    check('request card goes to requests topic', requestCard.body.chatId === '-5' && requestCard.body.threadId === '655');
+    check('no request card in admin topic', !tg.calls.some((c) => c.method === 'sendMessage' && c.body.chatId === '-5' && c.body.threadId === '3' && c.body.text.includes('Новый запрос')));
+
+    const allowCb = adminCbq('allow_-555_none');
+    allowCb.callback_query.message.message_thread_id = 655;
+    await bot.handleUpdate(allowCb);
+    const sheetLink = tg.calls.find((c) => c.method === 'sendMessage' && c.body.text.includes('Таблица очереди'));
+    check('sheet link goes to requests topic', sheetLink.body.chatId === '-5' && sheetLink.body.threadId === '655');
   }
 
   store.close();

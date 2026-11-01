@@ -47,6 +47,10 @@ export const config = {
   // ADMIN_CHAT_ID может включать топик: "chatId/threadId"
   adminChatId: (env('ADMIN_CHAT_ID', '').split('/')[0] || '').trim(),
   adminChatThreadId: (env('ADMIN_CHAT_ID', '').split('/')[1] || '').trim(),
+  // REQUESTS_CHAT_ID — карточки заявок на подключение и ссылки на таблицы;
+  // пустой = тот же чат/топик, что ADMIN_CHAT_ID
+  requestsChatId: (env('REQUESTS_CHAT_ID', '').split('/')[0] || '').trim(),
+  requestsChatThreadId: (env('REQUESTS_CHAT_ID', '').split('/')[1] || '').trim(),
   pollTimeoutSec: Number(env('TG_POLL_TIMEOUT_SEC', '30')),
   queueLimitPerType: Number(env('QUEUE_LIMIT_PER_TYPE', '3')),
   typeThresholds: { Стройка: 7, Исследование: 1 },
