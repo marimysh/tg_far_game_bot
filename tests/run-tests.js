@@ -401,9 +401,10 @@ async function main() {
   }
 
   {
-    // реестр: seed только в пустой, персистентность через файл
+    // реестр: seed только в пустой, персистентность через файл, нормализация ключа ('' == undefined)
     const f = `/tmp/far-bot-chats-persist-${Date.now()}.json`;
     const c1 = createChatsStore(f);
+    check('key normalizes empty thread', c1.key('-1', '') === c1.key('-1', undefined) && c1.key('-1', undefined) === '-1_none');
     check('seedIfEmpty fills empty', c1.seedIfEmpty([{ key: 'k1', chatId: '-1', spreadsheetId: 's1', allowed: true }]) === true);
     check('seedIfEmpty skips non-empty', c1.seedIfEmpty([{ key: 'k2', chatId: '-2', spreadsheetId: 's2', allowed: true }]) === false);
     check('seedIfEmpty one entry', c1.all().length === 1);
@@ -445,6 +446,7 @@ async function main() {
     await bot.handleUpdate(adminCbq('allow_-777_none'));
     check('sheet created via translit name', sheetCalls[0] === 'far_far_pomosch', JSON.stringify(sheetCalls));
     check('mapping allowed after approve', chats.get('-777', undefined)?.allowed === true && chats.get('-777', undefined)?.spreadsheetId === 'new-sheet-1');
+    check('mapping has chatId for digest', chats.get('-777', undefined)?.chatId === '-777');
     const adminNotice = tg.calls.find((c) => c.method === 'sendMessage' && c.body.chatId === '-5' && c.body.text.includes('Таблица очереди'));
     check('sheet link goes to admin chat', Boolean(adminNotice) && adminNotice.body.text.includes('https://docs.google.com/') && adminNotice.body.threadId === '3');
     const requesterNotice = tg.calls.find((c) => c.method === 'sendMessage' && c.body.chatId === '-777' && c.body.text.includes('подключён'));

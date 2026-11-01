@@ -159,6 +159,8 @@ export function createBot({ tg, getQueueApi, chats, store, config, log, createCh
   async function onStart(ctx) {
     const existing = chats.get(ctx.chatId, ctx.threadId);
     chats.set(ctx.chatId, ctx.threadId, {
+      chatId: ctx.chatId,
+      threadId: ctx.threadId ?? '',
       spreadsheetId: existing?.spreadsheetId,
       title: ctx.title ?? existing?.title ?? '',
       allowed: false,
@@ -198,6 +200,8 @@ export function createBot({ tg, getQueueApi, chats, store, config, log, createCh
     const thresholds = { ...config.typeThresholds, ...(rec?.thresholds ?? {}) };
     thresholds[st.data.type] = Math.floor(Number(text.replace(',', '.')));
     chats.set(ctx.chatId, ctx.threadId, {
+      chatId: ctx.chatId,
+      threadId: ctx.threadId ?? '',
       spreadsheetId: rec?.spreadsheetId ?? config.spreadsheetId,
       title: rec?.title ?? '',
       allowed: rec?.allowed ?? true,
@@ -340,6 +344,8 @@ export function createBot({ tg, getQueueApi, chats, store, config, log, createCh
       const name = rec?.title ? `«${rec.title}»` : `chat ${targetChat}`;
       if (data.split('_')[0] === 'deny') {
         chats.set(targetChat, targetThread, {
+          chatId: targetChat,
+          threadId: targetThread ?? '',
           spreadsheetId: rec?.spreadsheetId,
           title: rec?.title ?? '',
           allowed: false,
@@ -356,6 +362,8 @@ export function createBot({ tg, getQueueApi, chats, store, config, log, createCh
         const sheetName = sheetNameForChat(rec?.title, targetChat);
         const { spreadsheetId, url } = await createChatSheet(sheetName);
         chats.set(targetChat, targetThread, {
+          chatId: targetChat,
+          threadId: targetThread ?? '',
           spreadsheetId,
           title: rec?.title ?? '',
           allowed: true,
