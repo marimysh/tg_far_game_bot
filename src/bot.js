@@ -34,6 +34,14 @@ export function createBot({ tg, getQueueApi, chats, store, config, log, createCh
     return config.adminChatId && String(chatId) === String(config.adminChatId);
   }
 
+  // Карточки заявок и ссылки на таблицы: в REQUESTS_CHAT_ID, по умолчанию — в ADMIN_CHAT_ID
+  function requestsTarget() {
+    return {
+      chatId: config.requestsChatId || config.adminChatId,
+      threadId: config.requestsChatThreadId || config.adminChatThreadId || undefined,
+    };
+  }
+
   function isKnownChat(chatId, threadId) {
     const rec = chats.get(chatId, threadId);
     return Boolean(rec && rec.allowed !== false && rec.spreadsheetId);
@@ -176,11 +184,12 @@ export function createBot({ tg, getQueueApi, chats, store, config, log, createCh
     store.set(ctx.chatId, ctx.threadId, 'finish_command', {});
     if (!existing?.pending && config.adminChatId) {
       const name = ctx.title ? `«${ctx.title}»` : `chat ${ctx.chatId}`;
+      const target = requestsTarget();
       await tg.sendMessage(
-        config.adminChatId,
+        target.chatId,
         `Новый запрос на подключение: ${name} (chat ${ctx.chatId}, thread ${ctx.threadId ?? '—'})`,
         {
-          threadId: config.adminChatThreadId || undefined,
+          threadId: target.threadId,
           keyboard: [
             [{ text: '✅ Разрешить', callback_data: `allow_${ctx.chatId}_${ctx.threadId ?? 'none'}` }],
             [{ text: '❌ Отказать', callback_data: `deny_${ctx.chatId}_${ctx.threadId ?? 'none'}` }],
@@ -382,10 +391,11 @@ export function createBot({ tg, getQueueApi, chats, store, config, log, createCh
           thresholds: rec?.thresholds ?? config.typeThresholds,
         });
         await tg.editMessageText(ctx.chatId, ctx.messageId, `Разрешено: ${name}. Таблица «${sheetName}»`);
+        const target = requestsTarget();
         await tg.sendMessage(
-          config.adminChatId,
+          target.chatId,
           `Таблица очереди для ${name}: «${sheetName}»\n${url}`,
-          { threadId: config.adminChatThreadId || undefined },
+          { threadId: target.threadId },
         );
         await tg.sendMessage(targetChat, '✅ Ваш чат подключён к FAR Помощь. Справка: /farhelp', { threadId: targetThread });
       } catch (e) {
