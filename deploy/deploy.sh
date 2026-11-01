@@ -34,9 +34,11 @@ sudo rsync -a --delete --chown="$OWNER" --chmod=D755,F644 \
   --exclude digest-state.json --exclude '.deploy-notify' \
   /tmp/far-bot-deploy/ "$APP_DIR/"
 rm -rf /tmp/far-bot-deploy
-# Marker для бота: при старте шлёт в админ-чат «версия задеплоена» и удаляет файл
-printf 'version=%s service=%s deployed_at=%s\n' "$SHA" "$SERVICE" "$(date -Is)" | sudo tee "$APP_DIR/.deploy-notify" >/dev/null
-sudo chown "$OWNER" "$APP_DIR/.deploy-notify"
+# Marker для бота: при старте шлёт в админ-чат «версия задеплоена» и удаляет файл.
+# Только rsync/systemctl через sudo — остальное в /tmp без привилегий.
+printf 'version=%s service=%s deployed_at=%s\n' "$SHA" "$SERVICE" "$(date -Is)" > /tmp/far-bot-deploy-notify
+sudo rsync --chmod=F644 --chown="$OWNER" /tmp/far-bot-deploy-notify "$APP_DIR/.deploy-notify"
+rm -f /tmp/far-bot-deploy-notify
 sudo systemctl daemon-reload
 sudo systemctl restart "$SERVICE"
 sudo systemctl is-active --quiet "$SERVICE"
