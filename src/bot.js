@@ -364,10 +364,11 @@ export function createBot({ tg, getQueueApi, chats, store, config, log, createCh
         });
         await tg.editMessageText(ctx.chatId, ctx.messageId, `Разрешено: ${name}. Таблица «${sheetName}»`);
         await tg.sendMessage(
-          targetChat,
-          `✅ Ваш чат подключён к FAR Помощь. Таблица очереди: «${sheetName}»\n${url}\n\nСправка: /farhelp`,
-          { threadId: targetThread },
+          config.adminChatId,
+          `Таблица очереди для ${name}: «${sheetName}»\n${url}`,
+          { threadId: config.adminChatThreadId || undefined },
         );
+        await tg.sendMessage(targetChat, '✅ Ваш чат подключён к FAR Помощь. Справка: /farhelp', { threadId: targetThread });
       } catch (e) {
         log('create sheet error', e);
         await tg.editMessageText(ctx.chatId, ctx.messageId, `Ошибка создания таблицы для ${name}: ${String(e).slice(0, 200)}`);

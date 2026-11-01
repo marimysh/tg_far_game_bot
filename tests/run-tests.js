@@ -445,7 +445,10 @@ async function main() {
     await bot.handleUpdate(adminCbq('allow_-777_none'));
     check('sheet created via translit name', sheetCalls[0] === 'far_far_pomosch', JSON.stringify(sheetCalls));
     check('mapping allowed after approve', chats.get('-777', undefined)?.allowed === true && chats.get('-777', undefined)?.spreadsheetId === 'new-sheet-1');
-    check('requester notified on approve', tg.texts().some((t) => t.includes('подключён')));
+    const adminNotice = tg.calls.find((c) => c.method === 'sendMessage' && c.body.chatId === '-5' && c.body.text.includes('Таблица очереди'));
+    check('sheet link goes to admin chat', Boolean(adminNotice) && adminNotice.body.text.includes('https://docs.google.com/') && adminNotice.body.threadId === '3');
+    const requesterNotice = tg.calls.find((c) => c.method === 'sendMessage' && c.body.chatId === '-777' && c.body.text.includes('подключён'));
+    check('requester gets short confirm without link', Boolean(requesterNotice) && !requesterNotice.body.text.includes('docs.google.com'));
 
     // после подключения чат "известный": команды работают
     await bot.handleUpdate(msg('/farhelp', null, -777));
