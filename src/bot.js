@@ -14,12 +14,13 @@ const HELP_TEXT =
 const RETRY_COUNT_TEXT = 'Надо ввести число. Попробуй еще раз';
 
 import { localISO } from './queue.js';
+import { sheetNameForChat } from './translit.js';
 
 function isNumeric(text) {
   return /^-?\d+(\.\d+)?$/.test(String(text ?? '').trim());
 }
 
-export function createBot({ tg, getQueueApi, chats, store, config, log }) {
+export function createBot({ tg, getQueueApi, chats, store, config, log, createChatSheet }) {
   function topicKey(chatId, threadId) {
     return `${chatId}_${threadId ?? 'none'}`;
   }
@@ -27,6 +28,15 @@ export function createBot({ tg, getQueueApi, chats, store, config, log }) {
   function isAllowed(chatId, threadId) {
     if (config.allowedTopics.includes('*')) return true;
     return config.allowedTopics.includes(topicKey(chatId, threadId));
+  }
+
+  function isAdminChat(chatId) {
+    return config.adminChatId && String(chatId) === String(config.adminChatId);
+  }
+
+  function isKnownChat(chatId, threadId) {
+    const rec = chats.get(chatId, threadId);
+    return Boolean(rec && rec.allowed !== false && rec.spreadsheetId);
   }
 
   // Привязка топика к таблице: из реестра, иначе legacy-таблица из env.
@@ -55,9 +65,10 @@ export function createBot({ tg, getQueueApi, chats, store, config, log }) {
     }
   }
 
+  // callback_data ограничен Telegram 64 байтами — в кнопках кодируем id строки, а не «Ник - Тип»
   function usersKeyboard(rows, prefix) {
     return rows.map((r) => [
-      { text: `${r['Ник']} - ${r['Тип']}`, callback_data: `${prefix}_${r['Ник']} - ${r['Тип']}` },
+      { text: `${r['Ник']} - ${r['Тип']}`, callback_data: `${prefix}_${r['id']}` },
     ]);
   }
 
@@ -146,6 +157,39 @@ export function createBot({ tg, getQueueApi, chats, store, config, log }) {
     store.set(ctx.chatId, ctx.threadId, 'expect_thresh_type', {});
   }
 
+  async function onStart(ctx) {
+    const existing = chats.get(ctx.chatId, ctx.threadId);
+    chats.set(ctx.chatId, ctx.threadId, {
+      chatId: ctx.chatId,
+      threadId: ctx.threadId ?? '',
+      spreadsheetId: existing?.spreadsheetId,
+      title: ctx.title ?? existing?.title ?? '',
+      allowed: false,
+      pending: true,
+      thresholds: existing?.thresholds ?? config.typeThresholds,
+    });
+    await tg.sendMessage(
+      ctx.chatId,
+      'Отправлен запрос на добавление. При необходимости, связаться с @Marimysh',
+      { threadId: ctx.threadId },
+    );
+    store.set(ctx.chatId, ctx.threadId, 'finish_command', {});
+    if (!existing?.pending && config.adminChatId) {
+      const name = ctx.title ? `«${ctx.title}»` : `chat ${ctx.chatId}`;
+      await tg.sendMessage(
+        config.adminChatId,
+        `Новый запрос на подключение: ${name} (chat ${ctx.chatId}, thread ${ctx.threadId ?? '—'})`,
+        {
+          threadId: config.adminChatThreadId || undefined,
+          keyboard: [
+            [{ text: '✅ Разрешить', callback_data: `allow_${ctx.chatId}_${ctx.threadId ?? 'none'}` }],
+            [{ text: '❌ Отказать', callback_data: `deny_${ctx.chatId}_${ctx.threadId ?? 'none'}` }],
+          ],
+        },
+      );
+    }
+  }
+
   async function onThreshValue(ctx, st) {
     const text = String(ctx.text).trim();
     if (!isNumeric(text) || Number(text) < 0) {
@@ -157,6 +201,8 @@ export function createBot({ tg, getQueueApi, chats, store, config, log }) {
     const thresholds = { ...config.typeThresholds, ...(rec?.thresholds ?? {}) };
     thresholds[st.data.type] = Math.floor(Number(text.replace(',', '.')));
     chats.set(ctx.chatId, ctx.threadId, {
+      chatId: ctx.chatId,
+      threadId: ctx.threadId ?? '',
       spreadsheetId: rec?.spreadsheetId ?? config.spreadsheetId,
       title: rec?.title ?? '',
       allowed: rec?.allowed ?? true,
@@ -234,6 +280,14 @@ export function createBot({ tg, getQueueApi, chats, store, config, log }) {
     if (st.state === 'except_create_count') return onCount(ctx, st);
     if (st.state === 'expect_thresh_value') return onThreshValue(ctx, st);
 
+    // Неизвестный/неподключённый чат: реагируем только на /start и /farhelp (тихо в остальном)
+    if (!isKnownChat(ctx.chatId, ctx.threadId)) {
+      const text = String(ctx.text ?? '').trim();
+      if (text.startsWith('/start')) return onStart(ctx);
+      if (text.startsWith('/farhelp')) return onHelp(ctx);
+      return;
+    }
+
     const text = String(ctx.text ?? '').trim();
     if (text.startsWith('/farupdate')) return onFarUpdate(ctx);
     if (text.startsWith('/farready')) return onFarReady(ctx);
@@ -249,38 +303,95 @@ export function createBot({ tg, getQueueApi, chats, store, config, log }) {
     const data = ctx.data ?? '';
 
     if (data.split('_')[0] === 'update') {
-      const actionId = data.substring('update_'.length);
-      const [nick, , type] = actionId.split(' ');
-      store.set(ctx.chatId, ctx.threadId, 'expect_new_time', { actionId, nick, type });
+      const rowId = data.substring('update_'.length);
+      const { api } = await queueFor(ctx);
+      const queue = await api.readQueue();
+      const row = api.findById(api.actualRows(queue), rowId);
+      if (!row) {
+        await tg.editMessageText(ctx.chatId, ctx.messageId, 'Запись не найдена или уже закрыта');
+        store.set(ctx.chatId, ctx.threadId, 'finish_command', {});
+        return;
+      }
+      const actionId = `${row['Ник']} - ${row['Тип']}`;
+      store.set(ctx.chatId, ctx.threadId, 'expect_new_time', { actionId, nick: row['Ник'], type: row['Тип'] });
       await tg.editMessageText(ctx.chatId, ctx.messageId, `Введите новое значение в днях для ${actionId}`);
       return;
     }
 
     if (data.split('_')[0] === 'ready') {
-      const actionId = data.substring('ready_'.length);
-      const [nick, , type] = actionId.split(' ');
+      const rowId = data.substring('ready_'.length);
       const { api } = await queueFor(ctx);
       const queue = await api.readQueue();
-      const row = api.findByNickType(api.actualRows(queue), nick, type);
+      const row = api.findById(api.actualRows(queue), rowId);
       if (row) {
         await api.updateRow(row, { 'Статус': 'Готово', 'Время обновления': localISO(new Date()) });
+        await tg.editMessageText(ctx.chatId, ctx.messageId, `Заявка выполнена: ${row['Ник']}`);
+      } else {
+        await tg.editMessageText(ctx.chatId, ctx.messageId, 'Запись не найдена или уже закрыта');
       }
-      await tg.editMessageText(ctx.chatId, ctx.messageId, `Заявка выполнена: ${nick}`);
       store.set(ctx.chatId, ctx.threadId, 'finish_command', {});
       return;
     }
 
     if (data.split('_')[0] === 'cancel') {
-      const actionId = data.substring('cancel_'.length);
-      const [nick, , type] = actionId.split(' ');
+      const rowId = data.substring('cancel_'.length);
       const { api } = await queueFor(ctx);
       const queue = await api.readQueue();
-      const row = api.findByNickType(api.actualRows(queue), nick, type);
+      const row = api.findById(api.actualRows(queue), rowId);
       if (row) {
         await api.updateRow(row, { 'Статус': 'Отменено', 'Время обновления': localISO(new Date()) });
+        await tg.editMessageText(ctx.chatId, ctx.messageId, `Заявка отменена: ${row['Ник']}`);
+      } else {
+        await tg.editMessageText(ctx.chatId, ctx.messageId, 'Запись не найдена или уже закрыта');
       }
-      await tg.editMessageText(ctx.chatId, ctx.messageId, `Заявка отменена: ${nick}`);
       store.set(ctx.chatId, ctx.threadId, 'finish_command', {});
+      return;
+    }
+
+    if (data.split('_')[0] === 'allow' || data.split('_')[0] === 'deny') {
+      const [, targetChat, targetThr] = data.split('_');
+      const targetThread = targetThr === 'none' ? undefined : targetThr;
+      const rec = chats.get(targetChat, targetThread);
+      const name = rec?.title ? `«${rec.title}»` : `chat ${targetChat}`;
+      if (data.split('_')[0] === 'deny') {
+        chats.set(targetChat, targetThread, {
+          chatId: targetChat,
+          threadId: targetThread ?? '',
+          spreadsheetId: rec?.spreadsheetId,
+          title: rec?.title ?? '',
+          allowed: false,
+          pending: false,
+          thresholds: rec?.thresholds ?? config.typeThresholds,
+        });
+        await tg.editMessageText(ctx.chatId, ctx.messageId, `Отказано: ${name}`);
+        await tg.sendMessage(targetChat, 'Вам отказано. Для более подробной информации свяжитесь с @Marimysh', {
+          threadId: targetThread,
+        });
+        return;
+      }
+      try {
+        const sheetName = sheetNameForChat(rec?.title, targetChat);
+        const { spreadsheetId, url } = await createChatSheet(sheetName);
+        chats.set(targetChat, targetThread, {
+          chatId: targetChat,
+          threadId: targetThread ?? '',
+          spreadsheetId,
+          title: rec?.title ?? '',
+          allowed: true,
+          pending: false,
+          thresholds: rec?.thresholds ?? config.typeThresholds,
+        });
+        await tg.editMessageText(ctx.chatId, ctx.messageId, `Разрешено: ${name}. Таблица «${sheetName}»`);
+        await tg.sendMessage(
+          config.adminChatId,
+          `Таблица очереди для ${name}: «${sheetName}»\n${url}`,
+          { threadId: config.adminChatThreadId || undefined },
+        );
+        await tg.sendMessage(targetChat, '✅ Ваш чат подключён к FAR Помощь. Справка: /farhelp', { threadId: targetThread });
+      } catch (e) {
+        log('create sheet error', e);
+        await tg.editMessageText(ctx.chatId, ctx.messageId, `Ошибка создания таблицы для ${name}: ${String(e).slice(0, 200)}`);
+      }
       return;
     }
 
@@ -313,7 +424,7 @@ export function createBot({ tg, getQueueApi, chats, store, config, log }) {
     if (cb) {
       const chatId = String(cb.message?.chat?.id);
       const threadId = cb.message?.message_thread_id;
-      if (!isAllowed(chatId, threadId)) return;
+      if (!isAllowed(chatId, threadId) && !isAdminChat(chatId)) return;
       const ctx = {
         chatId,
         threadId,
@@ -327,9 +438,10 @@ export function createBot({ tg, getQueueApi, chats, store, config, log }) {
     }
 
     if (message) {
+      // Гейтинга здесь нет намеренно: неизвестный чат должен дойти до
+      // handleMessage, чтобы ответить на /start и /farhelp (заявка на доступ).
       const chatId = String(message.chat?.id);
       const threadId = message.message_thread_id;
-      if (!isAllowed(chatId, threadId)) return;
       const ctx = {
         chatId,
         threadId,
@@ -337,6 +449,7 @@ export function createBot({ tg, getQueueApi, chats, store, config, log }) {
         messageId: message.message_id,
         from: message.from,
         userId: message.from?.id != null ? String(message.from.id) : undefined,
+        title: message.chat?.title,
       };
       return handleMessage(ctx);
     }
