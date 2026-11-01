@@ -98,7 +98,9 @@ async function main() {
     const { bot } = makeCtx({ sheets, store, tg });
 
     await bot.handleUpdate(msg('/farhelp'));
-    check('help sent', tg.texts().some((t) => t.includes('/farcreate') && t.includes('маяками')));
+    const helpText = tg.texts().find((t) => t.includes('маяками')) ?? '';
+    check('help sent', helpText.includes('/farcreate'));
+    check('help lists all commands', ['/farcreate', '/farupdate', '/farready', '/farcancel', '/toptop'].every((c) => helpText.includes(c)));
     check('help state=finish', store.get('-100', 70).state === 'finish_command');
 
     await bot.handleUpdate(msg('/farcreate'));
@@ -119,9 +121,14 @@ async function main() {
     check('retry keeps state', store.get('-100', 70).state === 'except_create_count');
 
     await bot.handleUpdate(msg('5'));
+    check('below threshold rejected', tg.last().body.text === 'Для «Стройка» принимаются заявки от 7 дн. и больше. Введите число заново');
+    check('below threshold keeps state', store.get('-100', 70).state === 'except_create_count');
+    check('below threshold no append', sheets.rows.length === SEED.length);
+
+    await bot.handleUpdate(msg('8'));
     const appended = sheets.rows.at(-1);
     check('row appended', appended[2] === 'MyNick1' && appended[3] === 'Стройка' && appended[7] === 'В очереди');
-    check('row values', appended[5] === 5 && appended[6] === 7 && appended[4] === 5);
+    check('row values', appended[5] === 8 && appended[6] === 7 && appended[4] === 8);
     check('row id is row number', appended[0] === sheets.rows.length + 1);
     check('added confirmation', tg.last().body.text === 'Ваш запрос добавлен. Ожидайте обновления и помощи');
   }
@@ -155,12 +162,38 @@ async function main() {
     const tg = new FakeTg();
     const { bot } = makeCtx({ sheets, store, tg });
 
-    await bot.handleUpdate(msg('/fardelete'));
-    check('delete keyboard', JSON.stringify(tg.last().body.keyboard).includes('delete_Alice - Стройка'));
+    await bot.handleUpdate(msg('/farupdate'));
+    await bot.handleUpdate(cbq('update_Alice - Стройка'));
+    await bot.handleUpdate(msg('5'));
+    const row = sheets.rows[0];
+    check('below threshold closes', row[7] === 'Готово' && row[4] === 5);
+    check('below threshold message', tg.last().body.text.includes('меньше порога') && tg.last().body.text.includes('Готово'));
+  }
 
-    await bot.handleUpdate(cbq('delete_Alice - Стройка'));
-    check('delete closes row', sheets.rows[0][7] === 'Готово (снято)' && sheets.rows[0][9] !== '2026-10-28T10:00:00.000Z');
-    check('delete message', tg.last().body.text === 'Статус сменен на "готово" у Alice');
+  {
+    const sheets = new FakeSheets(SEED.map((r) => [...r]));
+    const tg = new FakeTg();
+    const { bot } = makeCtx({ sheets, store, tg });
+
+    await bot.handleUpdate(msg('/farready'));
+    check('ready keyboard', JSON.stringify(tg.last().body.keyboard).includes('ready_Alice - Стройка'));
+
+    await bot.handleUpdate(cbq('ready_Alice - Стройка'));
+    check('ready closes row', sheets.rows[0][7] === 'Готово' && sheets.rows[0][9] !== '2026-10-28T10:00:00.000Z');
+    check('ready message', tg.last().body.text === 'Заявка выполнена: Alice');
+  }
+
+  {
+    const sheets = new FakeSheets(SEED.map((r) => [...r]));
+    const tg = new FakeTg();
+    const { bot } = makeCtx({ sheets, store, tg });
+
+    await bot.handleUpdate(msg('/farcancel'));
+    check('cancel keyboard', JSON.stringify(tg.last().body.keyboard).includes('cancel_Bob - Исследование'));
+
+    await bot.handleUpdate(cbq('cancel_Bob - Исследование'));
+    check('cancel closes row', sheets.rows[1][7] === 'Отменено' && sheets.rows[1][9] !== '2026-10-29T10:00:00.000Z');
+    check('cancel message', tg.last().body.text === 'Заявка отменена: Bob');
   }
 
   {
@@ -193,9 +226,16 @@ async function main() {
     check(
       'digest text',
       text ===
-        '<b>Стройка</b>\n\n<code>Alice</code> Осталось: 8 д из 10 д\n<b>Исследования</b>\n\n<code>Bob</code> Осталось: 5 д из 12 д',
+        '<b>Стройка</b>\n\n<code>Alice</code> Осталось: 8 д из 10 д\n\n<b>Исследования</b>\n\n<code>Bob</code> Осталось: 5 д из 12 д',
       JSON.stringify(text),
     );
+
+    const buildOnly = actual.filter((r) => r['Тип'] === 'Стройка');
+    const textBuildOnly = buildDigestText(buildOnly);
+    check('digest skips empty lab section', textBuildOnly === '<b>Стройка</b>\n\n<code>Alice</code> Осталось: 8 д из 10 д');
+    const labOnly = actual.filter((r) => r['Тип'] === 'Исследование');
+    const textLabOnly = buildDigestText(labOnly);
+    check('digest skips empty build section', textLabOnly === '<b>Исследования</b>\n\n<code>Bob</code> Осталось: 5 д из 12 д');
   }
 
   {
@@ -208,11 +248,11 @@ async function main() {
     const { bot, queueApi } = makeCtx({ sheets, store, tg });
     const actual = queueApi.actualRows(await queueApi.readQueue());
     check('reordered header: actual rows', actual.length === 2, JSON.stringify(actual.map((r) => r['Ник'])));
-    await bot.handleUpdate(msg('/fardelete'));
-    check('reordered header: keyboard', JSON.stringify(tg.last().body.keyboard).includes('delete_Alice - Стройка'));
-    await bot.handleUpdate(cbq('delete_Alice - Стройка'));
+    await bot.handleUpdate(msg('/farcancel'));
+    check('reordered header: keyboard', JSON.stringify(tg.last().body.keyboard).includes('cancel_Alice - Стройка'));
+    await bot.handleUpdate(cbq('cancel_Alice - Стройка'));
     const closed = sheets.rows.find((r) => r[byName['Ник']] === 'Alice');
-    check('reordered header: close by name', closed[byName['Статус']] === 'Готово (снято)');
+    check('reordered header: close by name', closed[byName['Статус']] === 'Отменено');
   }
 
   store.close();
