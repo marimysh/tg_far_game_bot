@@ -8,8 +8,10 @@ import { startDigest } from './digest.js';
 import { createLogBuffer, createAlerter } from './alerting.js';
 
 const logBuffer = createLogBuffer();
+const fmt = (a) =>
+  typeof a === 'string' ? a : a instanceof Error ? (a.stack ?? String(a)) : JSON.stringify(a);
 const log = (...args) => {
-  const line = [new Date().toISOString(), ...args].map(String).join(' ');
+  const line = [new Date().toISOString(), ...args.map(fmt)].join(' ');
   console.log(line);
   logBuffer.add(line);
 };
