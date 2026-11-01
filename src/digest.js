@@ -14,12 +14,16 @@ export function buildDigestText(sortedActualRows) {
 
 // Персистентное хранилище хешей очередей: после рестарта/деплоя дайджест
 // не рассылается повторно, если содержимое очереди не менялось.
+// fresh=true, если файла не было (или он битый): тогда первый тик только
+// фиксирует базовые хеши без рассылки — холодный старт молчит.
 export function createHashStore(file) {
   let map = new Map();
+  let fresh = true;
   try {
     if (file && existsSync(file)) {
       const raw = JSON.parse(readFileSync(file, 'utf8'));
       map = new Map(Object.entries(raw));
+      fresh = false;
     }
   } catch {
     // битый файл — стартуем с чистого листа, как при первом запуске
@@ -35,6 +39,8 @@ export function createHashStore(file) {
     }
   }
   return {
+    fresh,
+    has: (k) => map.has(k),
     get: (k) => map.get(k),
     set: (k, v) => {
       map.set(k, v);
@@ -45,6 +51,7 @@ export function createHashStore(file) {
 
 export function startDigest({ getQueueApi, chats, tg, config, log, hashStore }) {
   const lastHashes = hashStore ?? new Map(); // key топика -> хеш очереди
+  const coldStart = hashStore?.fresh === true;
 
   async function tickEntry(entry) {
     let queue;
@@ -61,6 +68,12 @@ export function startDigest({ getQueueApi, chats, tg, config, log, hashStore }) 
       sorted.map((r) => [r._row, r['Ник'], r['Тип'], r['Статус'], r['Осталось дней'], r['Время обновления']]),
     );
     if (hash === lastHashes.get(entry.key)) return;
+    // Холодный старт (нет файла с хешами): первый тик молча фиксирует базовые
+    // хеши — без повторной рассылки во все чаты после деплоя
+    if (coldStart && !lastHashes.has(entry.key)) {
+      lastHashes.set(entry.key, hash);
+      return;
+    }
     lastHashes.set(entry.key, hash);
     if (sorted.length === 0) return;
     try {

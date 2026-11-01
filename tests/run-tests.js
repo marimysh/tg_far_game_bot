@@ -537,6 +537,9 @@ async function main() {
     check('hash store overwrite', createHashStore(file).get('-100_70') === 'hash-2');
     writeFileSync(file, '{corrupt json');
     check('hash store tolerates corrupt file', createHashStore(file).get('-100_70') === undefined);
+    writeFileSync(file, '{}');
+    check('hash store existing file is not fresh', createHashStore(file).fresh === false && createHashStore(file).has('-100_70') === false);
+    check('hash store missing file is fresh', createHashStore(`${file}.missing`).fresh === true);
     rmSync(file, { force: true });
     // без файла — просто in-memory
     const mem = createHashStore('');
