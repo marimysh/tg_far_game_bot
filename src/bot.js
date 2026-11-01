@@ -65,9 +65,10 @@ export function createBot({ tg, getQueueApi, chats, store, config, log, createCh
     }
   }
 
+  // callback_data ограничен Telegram 64 байтами — в кнопках кодируем id строки, а не «Ник - Тип»
   function usersKeyboard(rows, prefix) {
     return rows.map((r) => [
-      { text: `${r['Ник']} - ${r['Тип']}`, callback_data: `${prefix}_${r['Ник']} - ${r['Тип']}` },
+      { text: `${r['Ник']} - ${r['Тип']}`, callback_data: `${prefix}_${r['id']}` },
     ]);
   }
 
@@ -302,37 +303,47 @@ export function createBot({ tg, getQueueApi, chats, store, config, log, createCh
     const data = ctx.data ?? '';
 
     if (data.split('_')[0] === 'update') {
-      const actionId = data.substring('update_'.length);
-      const [nick, , type] = actionId.split(' ');
-      store.set(ctx.chatId, ctx.threadId, 'expect_new_time', { actionId, nick, type });
+      const rowId = data.substring('update_'.length);
+      const { api } = await queueFor(ctx);
+      const queue = await api.readQueue();
+      const row = api.findById(api.actualRows(queue), rowId);
+      if (!row) {
+        await tg.editMessageText(ctx.chatId, ctx.messageId, 'Запись не найдена или уже закрыта');
+        store.set(ctx.chatId, ctx.threadId, 'finish_command', {});
+        return;
+      }
+      const actionId = `${row['Ник']} - ${row['Тип']}`;
+      store.set(ctx.chatId, ctx.threadId, 'expect_new_time', { actionId, nick: row['Ник'], type: row['Тип'] });
       await tg.editMessageText(ctx.chatId, ctx.messageId, `Введите новое значение в днях для ${actionId}`);
       return;
     }
 
     if (data.split('_')[0] === 'ready') {
-      const actionId = data.substring('ready_'.length);
-      const [nick, , type] = actionId.split(' ');
+      const rowId = data.substring('ready_'.length);
       const { api } = await queueFor(ctx);
       const queue = await api.readQueue();
-      const row = api.findByNickType(api.actualRows(queue), nick, type);
+      const row = api.findById(api.actualRows(queue), rowId);
       if (row) {
         await api.updateRow(row, { 'Статус': 'Готово', 'Время обновления': localISO(new Date()) });
+        await tg.editMessageText(ctx.chatId, ctx.messageId, `Заявка выполнена: ${row['Ник']}`);
+      } else {
+        await tg.editMessageText(ctx.chatId, ctx.messageId, 'Запись не найдена или уже закрыта');
       }
-      await tg.editMessageText(ctx.chatId, ctx.messageId, `Заявка выполнена: ${nick}`);
       store.set(ctx.chatId, ctx.threadId, 'finish_command', {});
       return;
     }
 
     if (data.split('_')[0] === 'cancel') {
-      const actionId = data.substring('cancel_'.length);
-      const [nick, , type] = actionId.split(' ');
+      const rowId = data.substring('cancel_'.length);
       const { api } = await queueFor(ctx);
       const queue = await api.readQueue();
-      const row = api.findByNickType(api.actualRows(queue), nick, type);
+      const row = api.findById(api.actualRows(queue), rowId);
       if (row) {
         await api.updateRow(row, { 'Статус': 'Отменено', 'Время обновления': localISO(new Date()) });
+        await tg.editMessageText(ctx.chatId, ctx.messageId, `Заявка отменена: ${row['Ник']}`);
+      } else {
+        await tg.editMessageText(ctx.chatId, ctx.messageId, 'Запись не найдена или уже закрыта');
       }
-      await tg.editMessageText(ctx.chatId, ctx.messageId, `Заявка отменена: ${nick}`);
       store.set(ctx.chatId, ctx.threadId, 'finish_command', {});
       return;
     }

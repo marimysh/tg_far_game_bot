@@ -194,9 +194,14 @@ async function main() {
 
     await bot.handleUpdate(msg('/farupdate'));
     const kb = JSON.stringify(tg.last().body.keyboard);
-    check('update keyboard', kb.includes('update_Alice - Стройка') && kb.includes('update_Bob - Исследование') && !kb.includes('Closed'));
+    check(
+      'update keyboard',
+      kb.includes('{"text":"Alice - Стройка","callback_data":"update_2"}') &&
+        kb.includes('{"text":"Bob - Исследование","callback_data":"update_3"}') &&
+        !kb.includes('Closed'),
+    );
 
-    await bot.handleUpdate(cbq('update_Alice - Стройка'));
+    await bot.handleUpdate(cbq('update_2'));
     check('update ask value', tg.last().body.text === 'Введите новое значение в днях для Alice - Стройка');
     check('update state', store.get('-100', 70).state === 'expect_new_time');
 
@@ -217,7 +222,7 @@ async function main() {
     const { bot } = makeCtx({ sheets, store, tg });
 
     await bot.handleUpdate(msg('/farupdate'));
-    await bot.handleUpdate(cbq('update_Alice - Стройка'));
+    await bot.handleUpdate(cbq('update_2'));
     await bot.handleUpdate(msg('5'));
     const row = sheets.rows[0];
     check('below threshold closes', row[7] === 'Готово' && row[4] === 5);
@@ -230,9 +235,9 @@ async function main() {
     const { bot } = makeCtx({ sheets, store, tg });
 
     await bot.handleUpdate(msg('/farready'));
-    check('ready keyboard', JSON.stringify(tg.last().body.keyboard).includes('ready_Alice - Стройка'));
+    check('ready keyboard', JSON.stringify(tg.last().body.keyboard).includes('ready_2'));
 
-    await bot.handleUpdate(cbq('ready_Alice - Стройка'));
+    await bot.handleUpdate(cbq('ready_2'));
     check('ready closes row', sheets.rows[0][7] === 'Готово' && sheets.rows[0][9] !== '2026-10-28T10:00:00.000Z');
     check('ready message', tg.last().body.text === 'Заявка выполнена: Alice');
   }
@@ -243,9 +248,11 @@ async function main() {
     const { bot } = makeCtx({ sheets, store, tg });
 
     await bot.handleUpdate(msg('/farcancel'));
-    check('cancel keyboard', JSON.stringify(tg.last().body.keyboard).includes('cancel_Bob - Исследование'));
+    const cancelKb = tg.last().body.keyboard;
+    check('cancel keyboard', JSON.stringify(cancelKb).includes('cancel_3'));
+    check('cancel callbacks within 64 bytes', cancelKb.flat().every((b) => Buffer.byteLength(String(b.callback_data)) <= 64));
 
-    await bot.handleUpdate(cbq('cancel_Bob - Исследование'));
+    await bot.handleUpdate(cbq('cancel_3'));
     check('cancel closes row', sheets.rows[1][7] === 'Отменено' && sheets.rows[1][9] !== '2026-10-29T10:00:00.000Z');
     check('cancel message', tg.last().body.text === 'Заявка отменена: Bob');
   }
@@ -306,8 +313,8 @@ async function main() {
     const actual = queueApi.actualRows(await queueApi.readQueue());
     check('reordered header: actual rows', actual.length === 2, JSON.stringify(actual.map((r) => r['Ник'])));
     await bot.handleUpdate(msg('/farcancel'));
-    check('reordered header: keyboard', JSON.stringify(tg.last().body.keyboard).includes('cancel_Alice - Стройка'));
-    await bot.handleUpdate(cbq('cancel_Alice - Стройка'));
+    check('reordered header: keyboard', JSON.stringify(tg.last().body.keyboard).includes('cancel_2'));
+    await bot.handleUpdate(cbq('cancel_2'));
     const closed = sheets.rows.find((r) => r[byName['Ник']] === 'Alice');
     check('reordered header: close by name', closed[byName['Статус']] === 'Отменено');
   }
