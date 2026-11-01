@@ -5,8 +5,16 @@ import { StateStore } from './state.js';
 import { createQueue } from './queue.js';
 import { createBot } from './bot.js';
 import { startDigest } from './digest.js';
+import { createLogBuffer, createAlerter } from './alerting.js';
 
-const log = (...args) => console.log(new Date().toISOString(), ...args);
+const logBuffer = createLogBuffer();
+const fmt = (a) =>
+  typeof a === 'string' ? a : a instanceof Error ? (a.stack ?? String(a)) : JSON.stringify(a);
+const log = (...args) => {
+  const line = [new Date().toISOString(), ...args.map(fmt)].join(' ');
+  console.log(line);
+  logBuffer.add(line);
+};
 
 const tg = new TgClient(config.botToken, { pollTimeoutSec: config.pollTimeoutSec });
 const sheets = new SheetsClient(config.google, config.spreadsheetId);
@@ -18,15 +26,13 @@ const queueApi = createQueue({
 });
 const bot = createBot({ tg, queueApi, store, config, log });
 
-let lastAlert = 0;
-function alertAdmin(err) {
-  log('ERROR', err);
-  if (!config.adminChatId) return;
-  const now = Date.now();
-  if (now - lastAlert < 5 * 60 * 1000) return;
-  lastAlert = now;
-  tg.sendMessage(config.adminChatId, `⚠️ far-bot ошибка: ${String(err).slice(0, 300)}`).catch(() => {});
-}
+const alertAdmin = createAlerter({
+  tg,
+  chatId: config.adminChatId,
+  threadId: config.adminChatThreadId,
+  logBuffer,
+  log,
+});
 
 process.on('SIGINT', () => shutdown(0));
 process.on('SIGTERM', () => shutdown(0));
@@ -49,11 +55,17 @@ log('far-bot started', {
 });
 pollLoop(
   tg,
-  (u) => {
+  async (u) => {
     const msg = u.message ?? u.callback_query?.message;
     const text = u.message?.text ?? u.callback_query?.data;
-    log('update', JSON.stringify({ chat: msg?.chat?.id, thread: msg?.message_thread_id, text }));
-    return bot.handleUpdate(u);
+    const context = JSON.stringify({ chat: msg?.chat?.id, thread: msg?.message_thread_id, text });
+    log('update', context);
+    try {
+      await bot.handleUpdate(u);
+    } catch (e) {
+      e.context = context;
+      throw e;
+    }
   },
-  alertAdmin,
+  (err) => alertAdmin(err, err?.context),
 );

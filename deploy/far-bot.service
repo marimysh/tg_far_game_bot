@@ -1,18 +1,17 @@
 [Unit]
-Description=FAR Pomoshch telegram bot
+Description=far-bot PROD instance
 After=network-online.target
 Wants=network-online.target
 
 [Service]
 Type=simple
-# --- адаптировать под хост: пользователь, пути ---
-User=APP_USER
-Group=APP_USER
+User=nz
+Group=nz
 WorkingDirectory=/opt/far-bot
 EnvironmentFile=/opt/far-bot/.env
 Environment=TZ=Europe/Moscow
 # бинарник Node.js >= 20
-ExecStart=/usr/bin/node /opt/far-bot/src/index.js
+ExecStart=/home/nz/nodejs/node-v24.13.1-linux-x64/bin/node /opt/far-bot/src/index.js
 Restart=always
 RestartSec=5
 MemoryMax=150M

@@ -2,6 +2,7 @@ import { StateStore } from '../src/state.js';
 import { createQueue } from '../src/queue.js';
 import { createBot } from '../src/bot.js';
 import { buildDigestText } from '../src/digest.js';
+import { createLogBuffer, createAlerter } from '../src/alerting.js';
 
 // Реальный порядок колонок листа «Полный список»
 const HEADER = ['id', 'Дата', 'Ник', 'Тип', 'Осталось дней', 'Изначально', 'Порог в днях', 'Статус', 'Время добавления', 'Время обновления'];
@@ -253,6 +254,36 @@ async function main() {
     await bot.handleUpdate(cbq('cancel_Alice - Стройка'));
     const closed = sheets.rows.find((r) => r[byName['Ник']] === 'Alice');
     check('reordered header: close by name', closed[byName['Статус']] === 'Отменено');
+  }
+
+  {
+    // ring-buffer
+    const buf = createLogBuffer(3);
+    ['a', 'b', 'c', 'd', 'e'].forEach((l) => buf.add(l));
+    check('log buffer keeps last N', buf.tail(10).join(',') === 'c,d,e');
+    check('log buffer tail', buf.tail(2).join(',') === 'd,e');
+
+    // алертер: шлёт ошибку + логи + топик, троттлит повторы
+    const tg2 = new FakeTg();
+    const logBuf = createLogBuffer();
+    logBuf.add('line1');
+    const alert = createAlerter({ tg: tg2, chatId: '-5', threadId: '3', logBuffer: logBuf, log: () => {} });
+    alert(new Error('boom'), '{"chat":"-1"}');
+    const sent = tg2.calls.filter((c) => c.method === 'sendMessage');
+    check('alert sent once', sent.length === 1);
+    const body = sent[0].body;
+    check('alert chat+thread', body.chatId === '-5' && body.threadId === '3');
+    check('alert contains error', body.text.includes('boom'));
+    check('alert contains context', body.text.includes('{"chat":"-1"}'));
+    check('alert contains logs', body.text.includes('line1') && body.text.includes('последние логи'));
+    alert(new Error('boom2'));
+    check('alert throttled', tg2.calls.filter((c) => c.method === 'sendMessage').length === 1);
+
+    // без chatId — молчит
+    const tg3 = new FakeTg();
+    const silent = createAlerter({ tg: tg3, chatId: '', logBuffer: logBuf, log: () => {} });
+    silent(new Error('x'));
+    check('alert disabled without chatId', tg3.calls.length === 0);
   }
 
   store.close();
