@@ -24,6 +24,8 @@ src/sheets.js   клиент Google Sheets API: OAuth refresh, values get/append
 src/state.js    FSM-хранилище в JSON-файле (атомарная запись, TTL состояний 24 ч)
 src/queue.js    доменная логика: маппинг строк по ИМЕНАМ колонок из шапки листа,
                 actualRows(), appendRequest() (id пишется формулой =ROW()), updateRow()
+src/chats.js    реестр привязок топиков к таблицам (JSON, атомарная запись);
+                пороги per-chat хранятся в записи привязки
 src/bot.js      роутинг команд и конечный автомат (FSM) диалогов + клавиатуры
 src/digest.js   дайджест очереди: поллинг таблицы, отправка при изменении хеша
 src/index.js    сборка, логирование, alertAdmin, точка входа

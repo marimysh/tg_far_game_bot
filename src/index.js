@@ -6,6 +6,7 @@ import { createQueue } from './queue.js';
 import { createBot } from './bot.js';
 import { startDigest } from './digest.js';
 import { createLogBuffer, createAlerter } from './alerting.js';
+import { createChatsStore } from './chats.js';
 
 const logBuffer = createLogBuffer();
 const fmt = (a) =>
@@ -17,14 +18,45 @@ const log = (...args) => {
 };
 
 const tg = new TgClient(config.botToken, { pollTimeoutSec: config.pollTimeoutSec });
-const sheets = new SheetsClient(config.google, config.spreadsheetId);
 const store = new StateStore(config.stateFile);
-const queueApi = createQueue({
-  sheets,
-  sheetName: config.sheetName,
-  typeThresholds: config.typeThresholds,
-});
-const bot = createBot({ tg, queueApi, store, config, log });
+const chats = createChatsStore(config.chatsFile);
+
+// Клиенты/очереди кешируются по spreadsheetId: топик -> таблица
+const sheetsCache = new Map();
+function getSheets(spreadsheetId) {
+  if (!sheetsCache.has(spreadsheetId)) sheetsCache.set(spreadsheetId, new SheetsClient(config.google, spreadsheetId));
+  return sheetsCache.get(spreadsheetId);
+}
+const queueCache = new Map();
+function getQueueApi(spreadsheetId) {
+  if (!queueCache.has(spreadsheetId)) {
+    queueCache.set(
+      spreadsheetId,
+      createQueue({ sheets: getSheets(spreadsheetId), sheetName: config.sheetName, typeThresholds: config.typeThresholds }),
+    );
+  }
+  return queueCache.get(spreadsheetId);
+}
+
+// Legacy: одиночный контур из env становится первой записью реестра
+chats.seedIfEmpty(
+  config.digest.chatId
+    ? [
+        {
+          key: chats.key(config.digest.chatId, config.digest.threadId),
+          chatId: config.digest.chatId,
+          threadId: config.digest.threadId,
+          spreadsheetId: config.spreadsheetId,
+          title: 'legacy',
+          allowed: true,
+          thresholds: config.typeThresholds,
+        },
+      ]
+    : [],
+);
+chats.flush();
+
+const bot = createBot({ tg, getQueueApi, chats, store, config, log });
 
 const alertAdmin = createAlerter({
   tg,
@@ -38,6 +70,7 @@ process.on('SIGINT', () => shutdown(0));
 process.on('SIGTERM', () => shutdown(0));
 function shutdown(code) {
   store.close();
+  chats.close();
   process.exit(code);
 }
 
@@ -45,7 +78,7 @@ const digestLog = (msg, err) => {
   if (msg.endsWith('error')) alertAdmin(`${msg}: ${err}`);
   else log(msg, err ?? '');
 };
-if (config.digest.chatId) startDigest({ queueApi, tg, config, log: digestLog });
+if (config.digest.chatId) startDigest({ getQueueApi, chats, tg, config, log: digestLog });
 log('far-bot started', {
   allowedTopics: config.allowedTopics,
   sheet: `${config.spreadsheetId}/${config.sheetName}`,

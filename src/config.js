@@ -43,6 +43,7 @@ export const config = {
     pollSec: Number(env('DIGEST_POLL_SEC', '15')),
   },
   stateFile: env('STATE_FILE', resolve(process.cwd(), 'state.json')),
+  chatsFile: env('CHATS_FILE', resolve(process.cwd(), 'chats.json')),
   // ADMIN_CHAT_ID может включать топик: "chatId/threadId"
   adminChatId: (env('ADMIN_CHAT_ID', '').split('/')[0] || '').trim(),
   adminChatThreadId: (env('ADMIN_CHAT_ID', '').split('/')[1] || '').trim(),

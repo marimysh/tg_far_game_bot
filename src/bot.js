@@ -4,6 +4,7 @@ const HELP_TEXT =
   '• /farupdate - Изменить оставшееся время\n' +
   '• /farready - Отметить заявку выполненной\n' +
   '• /farcancel - Отменить заявку\n' +
+  '• /farthresh - Настроить пороги показа заявок для этого чата (админам)\n' +
   '• /toptop - Кто первый в очереди по стройке и исследованиям\n\n' +
   'Правила:\nОтветственность будет полностью на Вас. Все в порядке живой очереди!\n' +
   '❌По просьбам и желанию самих игроков Мы просим говорить когда\n' +
@@ -18,7 +19,7 @@ function isNumeric(text) {
   return /^-?\d+(\.\d+)?$/.test(String(text ?? '').trim());
 }
 
-export function createBot({ tg, queueApi, store, config, log }) {
+export function createBot({ tg, getQueueApi, chats, store, config, log }) {
   function topicKey(chatId, threadId) {
     return `${chatId}_${threadId ?? 'none'}`;
   }
@@ -28,6 +29,32 @@ export function createBot({ tg, queueApi, store, config, log }) {
     return config.allowedTopics.includes(topicKey(chatId, threadId));
   }
 
+  // Привязка топика к таблице: из реестра, иначе legacy-таблица из env.
+  // Пороги чата применяются при создании заявки; для уже созданных строк
+  // авторитетен «Порог в днях» самой строки.
+  function resolveChat(chatId, threadId) {
+    const rec = chats.get(chatId, threadId);
+    return {
+      spreadsheetId: rec?.spreadsheetId ?? config.spreadsheetId,
+      thresholds: rec?.thresholds ?? config.typeThresholds,
+    };
+  }
+
+  async function queueFor(ctx) {
+    const { spreadsheetId, thresholds } = resolveChat(ctx.chatId, ctx.threadId);
+    return { api: getQueueApi(spreadsheetId), thresholds };
+  }
+
+  async function isChatAdmin(ctx) {
+    if (!ctx.userId) return false;
+    try {
+      const status = await tg.getChatMember(ctx.chatId, ctx.userId);
+      return status === 'creator' || status === 'administrator';
+    } catch {
+      return false;
+    }
+  }
+
   function usersKeyboard(rows, prefix) {
     return rows.map((r) => [
       { text: `${r['Ник']} - ${r['Тип']}`, callback_data: `${prefix}_${r['Ник']} - ${r['Тип']}` },
@@ -35,8 +62,9 @@ export function createBot({ tg, queueApi, store, config, log }) {
   }
 
   async function onFarUpdate(ctx) {
-    const queue = await queueApi.readQueue();
-    const rows = queueApi.actualRows(queue);
+    const { api } = await queueFor(ctx);
+    const queue = await api.readQueue();
+    const rows = api.actualRows(queue);
     await tg.sendMessage(ctx.chatId, 'У кого обновить оставшееся время?', {
       threadId: ctx.threadId,
       keyboard: usersKeyboard(rows, 'update'),
@@ -45,8 +73,9 @@ export function createBot({ tg, queueApi, store, config, log }) {
   }
 
   async function onFarReady(ctx) {
-    const queue = await queueApi.readQueue();
-    const rows = queueApi.actualRows(queue);
+    const { api } = await queueFor(ctx);
+    const queue = await api.readQueue();
+    const rows = api.actualRows(queue);
     await tg.sendMessage(ctx.chatId, '/farready - Отметить заявку выполненной', {
       threadId: ctx.threadId,
       keyboard: usersKeyboard(rows, 'ready'),
@@ -55,8 +84,9 @@ export function createBot({ tg, queueApi, store, config, log }) {
   }
 
   async function onFarCancel(ctx) {
-    const queue = await queueApi.readQueue();
-    const rows = queueApi.actualRows(queue);
+    const { api } = await queueFor(ctx);
+    const queue = await api.readQueue();
+    const rows = api.actualRows(queue);
     await tg.sendMessage(ctx.chatId, '/farcancel - Отменить заявку', {
       threadId: ctx.threadId,
       keyboard: usersKeyboard(rows, 'cancel'),
@@ -65,8 +95,9 @@ export function createBot({ tg, queueApi, store, config, log }) {
   }
 
   async function onFarCreate(ctx) {
-    const queue = await queueApi.readQueue();
-    const rows = queueApi.actualRows(queue);
+    const { api } = await queueFor(ctx);
+    const queue = await api.readQueue();
+    const rows = api.actualRows(queue);
     const countBuild = rows.filter((r) => r['Тип'] === 'Стройка').length;
     const countLab = rows.filter((r) => r['Тип'] === 'Исследование').length;
     const text =
@@ -84,8 +115,9 @@ export function createBot({ tg, queueApi, store, config, log }) {
   }
 
   async function onTopTop(ctx) {
-    const queue = await queueApi.readQueue();
-    const rows = queueApi.actualRows(queue);
+    const { api } = await queueFor(ctx);
+    const queue = await api.readQueue();
+    const rows = api.actualRows(queue);
     const topBuild = rows.find((r) => r['Тип'] === 'Стройка')?.['Ник'] ?? '—';
     const topLab = rows.find((r) => r['Тип'] === 'Исследование')?.['Ник'] ?? '—';
     await tg.sendMessage(ctx.chatId, `<code>Стройка: ${topBuild} ------ Исследования: ${topLab}</code>`, {
@@ -99,6 +131,45 @@ export function createBot({ tg, queueApi, store, config, log }) {
     store.set(ctx.chatId, ctx.threadId, 'finish_command', {});
   }
 
+  async function onFarThresh(ctx) {
+    if (!(await isChatAdmin(ctx))) {
+      await tg.sendMessage(ctx.chatId, 'Пороги может менять только администратор чата', { threadId: ctx.threadId });
+      store.set(ctx.chatId, ctx.threadId, 'finish_command', {});
+      return;
+    }
+    const { thresholds } = resolveChat(ctx.chatId, ctx.threadId);
+    const btn = (type) => [{ text: `${type} (сейчас ${thresholds[type]} дн.)`, callback_data: `thresh_${type}` }];
+    await tg.sendMessage(ctx.chatId, 'Выбери тип, чтобы задать порог показа заявок для этого чата:', {
+      threadId: ctx.threadId,
+      keyboard: [btn('Стройка'), btn('Исследование')],
+    });
+    store.set(ctx.chatId, ctx.threadId, 'expect_thresh_type', {});
+  }
+
+  async function onThreshValue(ctx, st) {
+    const text = String(ctx.text).trim();
+    if (!isNumeric(text) || Number(text) < 0) {
+      await tg.sendMessage(ctx.chatId, RETRY_COUNT_TEXT, { threadId: ctx.threadId });
+      store.set(ctx.chatId, ctx.threadId, 'expect_thresh_value', st.data);
+      return;
+    }
+    const rec = chats.get(ctx.chatId, ctx.threadId);
+    const thresholds = { ...config.typeThresholds, ...(rec?.thresholds ?? {}) };
+    thresholds[st.data.type] = Math.floor(Number(text.replace(',', '.')));
+    chats.set(ctx.chatId, ctx.threadId, {
+      spreadsheetId: rec?.spreadsheetId ?? config.spreadsheetId,
+      title: rec?.title ?? '',
+      allowed: rec?.allowed ?? true,
+      thresholds,
+    });
+    await tg.sendMessage(
+      ctx.chatId,
+      `Порог для «${st.data.type}» в этом чате установлен: ${thresholds[st.data.type]} дн. Новые заявки ниже порога приниматься не будут.`,
+      { threadId: ctx.threadId },
+    );
+    store.set(ctx.chatId, ctx.threadId, 'finish_command', {});
+  }
+
   async function onNewTime(ctx, st) {
     const text = String(ctx.text).trim();
     if (!isNumeric(text)) {
@@ -107,8 +178,9 @@ export function createBot({ tg, queueApi, store, config, log }) {
       return;
     }
     const days = Number(text);
-    const queue = await queueApi.readQueue();
-    const row = queueApi.findByNickType(queueApi.actualRows(queue), st.data.nick, st.data.type);
+    const { api } = await queueFor(ctx);
+    const queue = await api.readQueue();
+    const row = api.findByNickType(api.actualRows(queue), st.data.nick, st.data.type);
     if (row) {
       const patch = { 'Осталось дней': days, 'Время обновления': localISO(new Date()) };
       let reply = 'Оставшееся время обновлено';
@@ -116,7 +188,7 @@ export function createBot({ tg, queueApi, store, config, log }) {
         patch['Статус'] = 'Готово';
         reply = `Осталось ${days} дн. — меньше порога (${row['Порог в днях']} дн.). Заявка закрыта со статусом «Готово»`;
       }
-      await queueApi.updateRow(row, patch);
+      await api.updateRow(row, patch);
       await tg.sendMessage(ctx.chatId, reply, { threadId: ctx.threadId });
     } else {
       await tg.sendMessage(ctx.chatId, 'Запись не найдена или уже закрыта', { threadId: ctx.threadId });
@@ -138,7 +210,8 @@ export function createBot({ tg, queueApi, store, config, log }) {
       return;
     }
     const days = Number(text.replace(',', '.'));
-    const minDays = Number(config.typeThresholds[st.data.type] ?? 1);
+    const { thresholds } = resolveChat(ctx.chatId, ctx.threadId);
+    const minDays = Number(thresholds[st.data.type] ?? 1);
     if (days < minDays) {
       await tg.sendMessage(
         ctx.chatId,
@@ -148,7 +221,8 @@ export function createBot({ tg, queueApi, store, config, log }) {
       store.set(ctx.chatId, ctx.threadId, 'except_create_count', st.data);
       return;
     }
-    await queueApi.appendRequest({ nick: st.data.nick, type: st.data.type, days });
+    const { api } = await queueFor(ctx);
+    await api.appendRequest({ nick: st.data.nick, type: st.data.type, days, thresholds });
     await tg.sendMessage(ctx.chatId, 'Ваш запрос добавлен. Ожидайте обновления и помощи', { threadId: ctx.threadId });
     store.set(ctx.chatId, ctx.threadId, 'finish_command', {});
   }
@@ -158,11 +232,13 @@ export function createBot({ tg, queueApi, store, config, log }) {
     if (st.state === 'expect_new_time') return onNewTime(ctx, st);
     if (st.state === 'except_create_nick') return onNick(ctx, st);
     if (st.state === 'except_create_count') return onCount(ctx, st);
+    if (st.state === 'expect_thresh_value') return onThreshValue(ctx, st);
 
     const text = String(ctx.text ?? '').trim();
     if (text.startsWith('/farupdate')) return onFarUpdate(ctx);
     if (text.startsWith('/farready')) return onFarReady(ctx);
     if (text.startsWith('/farcancel')) return onFarCancel(ctx);
+    if (text.startsWith('/farthresh')) return onFarThresh(ctx);
     if (text.startsWith('/farcreate')) return onFarCreate(ctx);
     if (text.startsWith('/toptop')) return onTopTop(ctx);
     if (text.startsWith('/farhelp')) return onHelp(ctx);
@@ -183,10 +259,11 @@ export function createBot({ tg, queueApi, store, config, log }) {
     if (data.split('_')[0] === 'ready') {
       const actionId = data.substring('ready_'.length);
       const [nick, , type] = actionId.split(' ');
-      const queue = await queueApi.readQueue();
-      const row = queueApi.findByNickType(queueApi.actualRows(queue), nick, type);
+      const { api } = await queueFor(ctx);
+      const queue = await api.readQueue();
+      const row = api.findByNickType(api.actualRows(queue), nick, type);
       if (row) {
-        await queueApi.updateRow(row, { 'Статус': 'Готово', 'Время обновления': localISO(new Date()) });
+        await api.updateRow(row, { 'Статус': 'Готово', 'Время обновления': localISO(new Date()) });
       }
       await tg.editMessageText(ctx.chatId, ctx.messageId, `Заявка выполнена: ${nick}`);
       store.set(ctx.chatId, ctx.threadId, 'finish_command', {});
@@ -196,13 +273,22 @@ export function createBot({ tg, queueApi, store, config, log }) {
     if (data.split('_')[0] === 'cancel') {
       const actionId = data.substring('cancel_'.length);
       const [nick, , type] = actionId.split(' ');
-      const queue = await queueApi.readQueue();
-      const row = queueApi.findByNickType(queueApi.actualRows(queue), nick, type);
+      const { api } = await queueFor(ctx);
+      const queue = await api.readQueue();
+      const row = api.findByNickType(api.actualRows(queue), nick, type);
       if (row) {
-        await queueApi.updateRow(row, { 'Статус': 'Отменено', 'Время обновления': localISO(new Date()) });
+        await api.updateRow(row, { 'Статус': 'Отменено', 'Время обновления': localISO(new Date()) });
       }
       await tg.editMessageText(ctx.chatId, ctx.messageId, `Заявка отменена: ${nick}`);
       store.set(ctx.chatId, ctx.threadId, 'finish_command', {});
+      return;
+    }
+
+    if (data.split('_')[0] === 'thresh') {
+      if (st.state !== 'expect_thresh_type') return;
+      const type = data.split('_')[1];
+      store.set(ctx.chatId, ctx.threadId, 'expect_thresh_value', { type });
+      await tg.editMessageText(ctx.chatId, ctx.messageId, `Введите порог в днях для «${type}» (целое число)`);
       return;
     }
 
@@ -234,6 +320,7 @@ export function createBot({ tg, queueApi, store, config, log }) {
         data: cb.data,
         callbackQueryId: cb.id,
         messageId: cb.message?.message_id,
+        userId: cb.from?.id != null ? String(cb.from.id) : undefined,
       };
       tg.answerCallbackQuery(ctx.callbackQueryId).catch((e) => log('answerCallbackQuery error', e));
       return handleCallback(ctx);
@@ -249,6 +336,7 @@ export function createBot({ tg, queueApi, store, config, log }) {
         text: message.text,
         messageId: message.message_id,
         from: message.from,
+        userId: message.from?.id != null ? String(message.from.id) : undefined,
       };
       return handleMessage(ctx);
     }

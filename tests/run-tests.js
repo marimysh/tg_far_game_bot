@@ -3,6 +3,7 @@ import { createQueue } from '../src/queue.js';
 import { createBot } from '../src/bot.js';
 import { buildDigestText } from '../src/digest.js';
 import { createLogBuffer, createAlerter } from '../src/alerting.js';
+import { createChatsStore } from '../src/chats.js';
 
 // Реальный порядок колонок листа «Полный список»
 const HEADER = ['id', 'Дата', 'Ник', 'Тип', 'Осталось дней', 'Изначально', 'Порог в днях', 'Статус', 'Время добавления', 'Время обновления'];
@@ -51,6 +52,10 @@ class FakeTg {
   async answerCallbackQuery(id) {
     this.record('answerCallbackQuery', { id });
   }
+  async getChatMember(chatId, userId) {
+    this.record('getChatMember', { chatId, userId });
+    return this.memberStatus ?? 'administrator';
+  }
   last() {
     return this.calls[this.calls.length - 1];
   }
@@ -66,15 +71,35 @@ const SEED = [
   [4, '30.10.2026', 'Closed', 'Стройка', 9, 9, 7, 'Готово (снято)', '2026-10-30T10:00:00.000Z', '2026-10-30T10:00:00.000Z'],
 ];
 
-function makeCtx({ sheets, store, tg, allowedTopics = ['-100_70'] }) {
+function makeCtx({ sheets, store, tg, allowedTopics = ['-100_70'], chats, thresholds }) {
   const queueApi = createQueue({ sheets, sheetName: 'Полный список', typeThresholds: { Стройка: 7, Исследование: 1 } });
-  const bot = createBot({ tg, queueApi, store, config: { allowedTopics, typeThresholds: { Стройка: 7, Исследование: 1 } }, log: () => {} });
-  return { bot, queueApi };
+  const chatsStore =
+    chats ??
+    (() => {
+      const c = createChatsStore(`/tmp/far-bot-chats-${Date.now()}-${Math.random()}.json`);
+      c.seedIfEmpty([
+        { key: c.key('-100', 70), chatId: '-100', threadId: 70, spreadsheetId: 'default', title: 'test', allowed: true, thresholds: { Стройка: 7, Исследование: 1 } },
+      ]);
+      c.flush();
+      return c;
+    })();
+  if (thresholds) {
+    chatsStore.set('-100', 70, { spreadsheetId: 'default', title: 'test', allowed: true, thresholds });
+  }
+  const config = {
+    allowedTopics,
+    spreadsheetId: 'default',
+    typeThresholds: { Стройка: 7, Исследование: 1 },
+  };
+  const bot = createBot({ tg, getQueueApi: () => queueApi, chats: chatsStore, store, config, log: () => {} });
+  return { bot, queueApi, chats: chatsStore };
 }
 
-const msg = (text, threadId = 70) => ({ message: { message_id: 1, chat: { id: -100 }, message_thread_id: threadId, text } });
+const msg = (text, threadId = 70) => ({
+  message: { message_id: 1, chat: { id: -100 }, message_thread_id: threadId, text, from: { id: 42 } },
+});
 const cbq = (data, messageId = 50) => ({
-  callback_query: { id: 'q1', data, message: { message_id: messageId, chat: { id: -100 }, message_thread_id: 70 } },
+  callback_query: { id: 'q1', data, from: { id: 42 }, message: { message_id: messageId, chat: { id: -100 }, message_thread_id: 70 } },
 });
 
 let passed = 0;
@@ -296,6 +321,66 @@ async function main() {
     const queueApi = createQueue({ sheets, sheetName: 'Полный список', typeThresholds: { Стройка: 7, Исследование: 1 } });
     const actual = queueApi.actualRows(await queueApi.readQueue());
     check('num parsing: NBSP thousands separator', actual.length === 1 && actual[0]['Осталось дней'] === 4444 && actual[0]['Изначально'] === 10000);
+  }
+
+  {
+    // /farthresh: админ может, не-админ нет
+    const sheets = new FakeSheets(SEED.map((r) => [...r]));
+    const tg = new FakeTg();
+    const { bot, chats } = makeCtx({ sheets, store, tg });
+
+    tg.memberStatus = 'member';
+    await bot.handleUpdate(msg('/farthresh'));
+    check('thresh denied for non-admin', tg.last().body.text === 'Пороги может менять только администратор чата');
+    check('thresh denied keeps finish state', store.get('-100', 70).state === 'finish_command');
+
+    tg.memberStatus = 'administrator';
+    await bot.handleUpdate(msg('/farthresh'));
+    const kb = JSON.stringify(tg.last().body.keyboard);
+    check('thresh keyboard', kb.includes('thresh_Стройка') && kb.includes('thresh_Исследование'));
+    check('thresh shows current values', kb.includes('Стройка (сейчас 7 дн.)') && kb.includes('Исследование (сейчас 1 дн.)'));
+
+    await bot.handleUpdate(cbq('thresh_Стройка'));
+    check('thresh asks value', tg.last().body.text === 'Введите порог в днях для «Стройка» (целое число)');
+    check('thresh state', store.get('-100', 70).state === 'expect_thresh_value');
+
+    await bot.handleUpdate(msg('abc'));
+    check('thresh non-numeric retry', tg.last().body.text === 'Надо ввести число. Попробуй еще раз');
+
+    await bot.handleUpdate(msg('9'));
+    check('thresh saved', chats.get('-100', 70).thresholds['Стройка'] === 9);
+    check('thresh confirm', tg.last().body.text.includes('установлен: 9 дн.'));
+  }
+
+  {
+    // per-chat thresholds: create below custom threshold rejected, row gets custom Порог
+    const sheets = new FakeSheets(SEED.map((r) => [...r]));
+    const tg = new FakeTg();
+    const { bot } = makeCtx({ sheets, store, tg, thresholds: { Стройка: 9, Исследование: 1 } });
+
+    await bot.handleUpdate(msg('/farcreate'));
+    await bot.handleUpdate(cbq('create_Стройка'));
+    await bot.handleUpdate(msg('Nick9'));
+    await bot.handleUpdate(msg('8'));
+    check('custom threshold rejects below', tg.last().body.text === 'Для «Стройка» принимаются заявки от 9 дн. и больше. Введите число заново');
+
+    await bot.handleUpdate(msg('10'));
+    const appended = sheets.rows.at(-1);
+    check('custom threshold row appended', appended[2] === 'Nick9' && appended[6] === 9 && appended[4] === 10);
+  }
+
+  {
+    // реестр: seed только в пустой, персистентность через файл
+    const f = `/tmp/far-bot-chats-persist-${Date.now()}.json`;
+    const c1 = createChatsStore(f);
+    check('seedIfEmpty fills empty', c1.seedIfEmpty([{ key: 'k1', chatId: '-1', spreadsheetId: 's1', allowed: true }]) === true);
+    check('seedIfEmpty skips non-empty', c1.seedIfEmpty([{ key: 'k2', chatId: '-2', spreadsheetId: 's2', allowed: true }]) === false);
+    check('seedIfEmpty one entry', c1.all().length === 1);
+    c1.set('-2', 5, { spreadsheetId: 's2', title: '', allowed: true, thresholds: { Стройка: 3, Исследование: 1 } });
+    c1.flush();
+    c1.close();
+    const c2 = createChatsStore(f);
+    check('registry persists across instances', c2.all().length === 2 && c2.get('-2', 5).spreadsheetId === 's2' && c2.get('-2', 5).thresholds['Стройка'] === 3);
   }
 
   store.close();

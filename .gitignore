@@ -1,5 +1,6 @@
 .env
 .env.test
 state.json
+chats.json
 *.tmp
 node_modules/

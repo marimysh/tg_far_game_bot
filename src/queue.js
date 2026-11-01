@@ -85,9 +85,10 @@ export function createQueue({ sheets, sheetName, typeThresholds }) {
     return rows.find((r) => String(r['Ник']) === nick && String(r['Тип']) === type);
   }
 
-  async function appendRequest({ nick, type, days }) {
+  async function appendRequest({ nick, type, days, thresholds }) {
     const idx = await headerIndex();
     const now = new Date();
+    const thr = thresholds ?? typeThresholds;
     const data = {
       id: '=ROW()',
       Дата: formatDateDDMMYYYY(now),
@@ -95,7 +96,7 @@ export function createQueue({ sheets, sheetName, typeThresholds }) {
       Тип: type,
       Статус: 'В очереди',
       Изначально: days,
-      'Порог в днях': typeThresholds[type] ?? 1,
+      'Порог в днях': thr[type] ?? 1,
       'Осталось дней': days,
       'Время добавления': localISO(now),
       'Время обновления': localISO(now),
