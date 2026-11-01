@@ -102,9 +102,13 @@ log('far-bot started', {
     ? `${config.digest.chatId}/${config.digest.threadId} every ${config.digest.pollSec}s`
     : 'disabled',
 });
+// Одиночные сетевые флики (fetch failed в getUpdates) не алертим:
+// только 3+ подряд идущих ошибок опроса — признак реальной поломки сети/токена.
+let consecutivePollErrors = 0;
 pollLoop(
   tg,
   async (u) => {
+    consecutivePollErrors = 0;
     const msg = u.message ?? u.callback_query?.message;
     const text = u.message?.text ?? u.callback_query?.data;
     const context = JSON.stringify({ chat: msg?.chat?.id, thread: msg?.message_thread_id, text });
@@ -116,5 +120,14 @@ pollLoop(
       throw e;
     }
   },
-  (err) => alertAdmin(err, err?.context),
+  (err) => {
+    if (String(err).includes('fetch failed')) {
+      consecutivePollErrors++;
+      if (consecutivePollErrors < 3) {
+        log('poll error (suppressed alert)', err);
+        return;
+      }
+    }
+    alertAdmin(err, err?.context);
+  },
 );
