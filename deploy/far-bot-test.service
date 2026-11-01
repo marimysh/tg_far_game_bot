@@ -1,0 +1,20 @@
+[Unit]
+Description=far-bot TEST instance
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=nz
+Group=nz
+WorkingDirectory=/opt/far-bot-test
+EnvironmentFile=/opt/far-bot-test/.env
+Environment=TZ=Europe/Moscow
+# бинарник Node.js >= 20
+ExecStart=/home/nz/nodejs/node-v24.13.1-linux-x64/bin/node /opt/far-bot-test/src/index.js
+Restart=always
+RestartSec=5
+MemoryMax=150M
+
+[Install]
+WantedBy=multi-user.target
