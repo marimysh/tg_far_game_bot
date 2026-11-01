@@ -4,3 +4,5 @@ state.json
 chats.json
 *.tmp
 node_modules/
+digest-state.json
+.deploy-notify
