@@ -70,9 +70,10 @@ export class SheetsClient {
     return { spreadsheetId: data.spreadsheetId, url: data.spreadsheetUrl };
   }
 
-  // Переименовывает первый лист (sheetId 0) таблицы
+  // Переименовывает первый лист (sheetId 0) таблицы.
+  // Внимание: эндпоинт batchUpdate — с двоеточием: /spreadsheets/{id}:batchUpdate
   async renameFirstSheet(title) {
-    return this.api('/batchUpdate', {
+    return this.api(':batchUpdate', {
       method: 'POST',
       body: { requests: [{ updateSheetProperties: { properties: { sheetId: 0, title }, fields: 'title' } }] },
     });
