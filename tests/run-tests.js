@@ -1,7 +1,8 @@
+import { writeFileSync, rmSync } from 'node:fs';
 import { StateStore } from '../src/state.js';
 import { createQueue } from '../src/queue.js';
 import { createBot } from '../src/bot.js';
-import { buildDigestText } from '../src/digest.js';
+import { buildDigestText, createHashStore } from '../src/digest.js';
 import { createLogBuffer, createAlerter } from '../src/alerting.js';
 import { createChatsStore } from '../src/chats.js';
 import { translit, sheetNameForChat } from '../src/translit.js';
@@ -522,6 +523,25 @@ async function main() {
     await bot.handleUpdate(allowCb);
     const sheetLink = tg.calls.find((c) => c.method === 'sendMessage' && c.body.text.includes('Таблица очереди'));
     check('sheet link goes to requests topic', sheetLink.body.chatId === '-5' && sheetLink.body.threadId === '655');
+  }
+
+  {
+    // createHashStore: хеши переживают «рестарт» (новый инстанс на тот же файл)
+    const file = `/tmp/far-bot-hashstore-${Date.now()}.json`;
+    const a = createHashStore(file);
+    a.set('-100_70', 'hash-1');
+    check('hash store get/set', a.get('-100_70') === 'hash-1' && a.get('-100_71') === undefined);
+    const b = createHashStore(file);
+    check('hash store persists across instances', b.get('-100_70') === 'hash-1');
+    b.set('-100_70', 'hash-2');
+    check('hash store overwrite', createHashStore(file).get('-100_70') === 'hash-2');
+    writeFileSync(file, '{corrupt json');
+    check('hash store tolerates corrupt file', createHashStore(file).get('-100_70') === undefined);
+    rmSync(file, { force: true });
+    // без файла — просто in-memory
+    const mem = createHashStore('');
+    mem.set('k', 'v');
+    check('hash store memory mode', mem.get('k') === 'v');
   }
 
   store.close();

@@ -44,6 +44,10 @@ export const config = {
   },
   stateFile: env('STATE_FILE', resolve(process.cwd(), 'state.json')),
   chatsFile: env('CHATS_FILE', resolve(process.cwd(), 'chats.json')),
+  // Хеши последних дайджестов: переживают рестарт, чтобы не слать повторно
+  digestStateFile: env('DIGEST_STATE_FILE', resolve(process.cwd(), 'digest-state.json')),
+  // Маркер от deploy.sh: бот шлёт в админ-чат «версия задеплоена» и удаляет файл
+  deployNotifyFile: env('DEPLOY_NOTIFY_FILE', resolve(process.cwd(), '.deploy-notify')),
   // ADMIN_CHAT_ID может включать топик: "chatId/threadId"
   adminChatId: (env('ADMIN_CHAT_ID', '').split('/')[0] || '').trim(),
   adminChatThreadId: (env('ADMIN_CHAT_ID', '').split('/')[1] || '').trim(),

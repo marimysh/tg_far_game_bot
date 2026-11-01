@@ -1,10 +1,11 @@
+import { existsSync, readFileSync, rmSync } from 'node:fs';
 import { config } from './config.js';
 import { TgClient, pollLoop } from './tg.js';
 import { SheetsClient } from './sheets.js';
 import { StateStore } from './state.js';
 import { createQueue, COLUMNS, localISO, formatDateDDMMYYYY } from './queue.js';
 import { createBot } from './bot.js';
-import { startDigest } from './digest.js';
+import { startDigest, createHashStore } from './digest.js';
 import { createLogBuffer, createAlerter } from './alerting.js';
 import { createChatsStore } from './chats.js';
 
@@ -94,7 +95,9 @@ const digestLog = (msg, err) => {
   if (msg.endsWith('error')) alertAdmin(`${msg}: ${err}`);
   else log(msg, err ?? '');
 };
-if (config.digest.chatId) startDigest({ getQueueApi, chats, tg, config, log: digestLog });
+if (config.digest.chatId) {
+  startDigest({ getQueueApi, chats, tg, config, log: digestLog, hashStore: createHashStore(config.digestStateFile) });
+}
 log('far-bot started', {
   allowedTopics: config.allowedTopics,
   sheet: `${config.spreadsheetId}/${config.sheetName}`,
@@ -102,6 +105,22 @@ log('far-bot started', {
     ? `${config.digest.chatId}/${config.digest.threadId} every ${config.digest.pollSec}s`
     : 'disabled',
 });
+
+// Уведомление об успешном деплое: deploy.sh кладёт marker перед рестартом.
+// Дайджест при этом не рассылается повторно — хеши очередей персистентны.
+if (config.adminChatId && existsSync(config.deployNotifyFile)) {
+  const info = readFileSync(config.deployNotifyFile, 'utf8').trim();
+  try {
+    await tg.sendMessage(config.adminChatId, `✅ Деплой завершён успешно: ${info}`, {
+      threadId: config.adminChatThreadId || undefined,
+    });
+    log('deploy notify sent', info);
+    rmSync(config.deployNotifyFile, { force: true });
+  } catch (e) {
+    log('deploy notify failed', e);
+    alertAdmin(`deploy notify failed: ${e}`);
+  }
+}
 // Одиночные сетевые флики (fetch failed в getUpdates) не алертим:
 // только 3+ подряд идущих ошибок опроса — признак реальной поломки сети/токена.
 let consecutivePollErrors = 0;

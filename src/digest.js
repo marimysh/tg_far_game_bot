@@ -1,3 +1,5 @@
+import { existsSync, readFileSync, writeFileSync, renameSync } from 'node:fs';
+
 export function buildDigestText(sortedActualRows) {
   const sections = ['Стройка', 'Исследование']
     .map((type) => {
@@ -10,8 +12,39 @@ export function buildDigestText(sortedActualRows) {
   return sections.join('\n\n');
 }
 
-export function startDigest({ getQueueApi, chats, tg, config, log }) {
-  const lastHashes = new Map(); // key топика -> хеш очереди
+// Персистентное хранилище хешей очередей: после рестарта/деплоя дайджест
+// не рассылается повторно, если содержимое очереди не менялось.
+export function createHashStore(file) {
+  let map = new Map();
+  try {
+    if (file && existsSync(file)) {
+      const raw = JSON.parse(readFileSync(file, 'utf8'));
+      map = new Map(Object.entries(raw));
+    }
+  } catch {
+    // битый файл — стартуем с чистого листа, как при первом запуске
+  }
+  function save() {
+    if (!file) return;
+    try {
+      const tmp = `${file}.tmp`;
+      writeFileSync(tmp, JSON.stringify(Object.fromEntries(map)));
+      renameSync(tmp, file);
+    } catch {
+      // не критично: максимум — лишняя рассылка после следующего рестарта
+    }
+  }
+  return {
+    get: (k) => map.get(k),
+    set: (k, v) => {
+      map.set(k, v);
+      save();
+    },
+  };
+}
+
+export function startDigest({ getQueueApi, chats, tg, config, log, hashStore }) {
+  const lastHashes = hashStore ?? new Map(); // key топика -> хеш очереди
 
   async function tickEntry(entry) {
     let queue;
