@@ -1,0 +1,14 @@
+{
+  "name": "far-bot",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "FAR Помощь queue bot — standalone Node.js port of the n8n workflows «tg base part bot» + «tg refresh»",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "start": "node src/index.js",
+    "test": "node tests/run-tests.js"
+  }
+}
