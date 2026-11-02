@@ -73,7 +73,7 @@ const SEED = [
   [4, '30.10.2026', 'Closed', 'Стройка', 9, 9, 7, 'Готово (снято)', '2026-10-30T10:00:00.000Z', '2026-10-30T10:00:00.000Z'],
 ];
 
-function makeCtx({ sheets, store, tg, allowedTopics = ['-100_70'], chats, thresholds, createChatSheet, configExtra }) {
+function makeCtx({ sheets, store, tg, allowedTopics = ['-100_70'], chats, thresholds, createChatSheet, configExtra, log }) {
   const queueApi = createQueue({ sheets, sheetName: 'Полный список', typeThresholds: { Стройка: 7, Исследование: 1 } });
   const chatsStore =
     chats ??
@@ -109,7 +109,7 @@ function makeCtx({ sheets, store, tg, allowedTopics = ['-100_70'], chats, thresh
     chats: chatsStore,
     store,
     config,
-    log: () => {},
+    log: log ?? (() => {}),
     createChatSheet: createSheetFn,
   });
   return { bot, queueApi, chats: chatsStore, sheetCalls };
@@ -499,6 +499,44 @@ async function main() {
     await bot.handleUpdate(msg('/start', 5, -999, 'Another'));
     await bot.handleUpdate(adminCbq('allow_-999_5'));
     check('admin gate bypassed', chats.get('-999', 5)?.allowed === true);
+  }
+
+  {
+    // logging отброшенных callback-ов: гейтинг, несовпадение состояния FSM, неизвестный data.
+    // Формат 'callback dropped' парсится scripts/far-bot-metrics.sh.
+    const sheets = new FakeSheets(SEED.map((r) => [...r]));
+    const tg = new FakeTg();
+    const logs = [];
+    const { bot } = makeCtx({ sheets, store, tg, log: (...a) => logs.push(a) });
+
+    // топик -100_71: не в ALLOWED_TOPICS и не подключён через реестр
+    const gatedCb = cbq('create_Стройка');
+    gatedCb.callback_query.message.message_thread_id = 71;
+    await bot.handleUpdate(gatedCb);
+    check(
+      'gated callback logged not_allowed',
+      logs.some((a) => a[0] === 'callback dropped' && a[1].reason === 'not_allowed' && a[1].thread === 71 && a[1].data === 'create_Стройка'),
+      JSON.stringify(logs),
+    );
+    check('gated callback fully silent', tg.calls.length === 0);
+
+    // create-клик вне шага выбора типа (состояние топика -100_70 к этому моменту != expect_command_create_type)
+    logs.length = 0;
+    await bot.handleUpdate(cbq('create_Исследование'));
+    check(
+      'state-mismatch callback logged',
+      logs.some((a) => a[0] === 'callback dropped' && a[1].reason === 'state_mismatch' && a[1].data === 'create_Исследование'),
+      JSON.stringify(logs),
+    );
+
+    // неизвестный callback
+    logs.length = 0;
+    await bot.handleUpdate(cbq('legacy_something'));
+    check(
+      'unknown callback logged',
+      logs.some((a) => a[0] === 'callback dropped' && a[1].reason === 'unknown' && a[1].data === 'legacy_something'),
+      JSON.stringify(logs),
+    );
   }
 
   {

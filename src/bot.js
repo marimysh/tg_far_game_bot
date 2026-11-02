@@ -415,7 +415,10 @@ export function createBot({ tg, getQueueApi, chats, store, config, log, createCh
     }
 
     if (data.split('_')[0] === 'thresh') {
-      if (st.state !== 'expect_thresh_type') return;
+      if (st.state !== 'expect_thresh_type') {
+        log('callback dropped', { chat: ctx.chatId, thread: ctx.threadId, data, reason: 'state_mismatch' });
+        return;
+      }
       const type = data.split('_')[1];
       store.set(ctx.chatId, ctx.threadId, 'expect_thresh_value', { type });
       await tg.editMessageText(ctx.chatId, ctx.messageId, `Введите порог в днях для «${type}» (целое число)`);
@@ -432,8 +435,14 @@ export function createBot({ tg, getQueueApi, chats, store, config, log, createCh
         const type = data.split('_')[1];
         store.set(ctx.chatId, ctx.threadId, 'except_create_nick', { type });
         await tg.editMessageText(ctx.chatId, ctx.messageId, 'Введи ник');
+        return;
       }
+      log('callback dropped', { chat: ctx.chatId, thread: ctx.threadId, data, reason: 'state_mismatch' });
+      return;
     }
+
+    // Неизвестный callback (старая клавиатура от прошлой версии и т.п.)
+    log('callback dropped', { chat: ctx.chatId, thread: ctx.threadId, data, reason: 'unknown' });
   }
 
   async function handleUpdate(update) {
@@ -443,7 +452,11 @@ export function createBot({ tg, getQueueApi, chats, store, config, log, createCh
     if (cb) {
       const chatId = String(cb.message?.chat?.id);
       const threadId = cb.message?.message_thread_id;
-      if (!isAllowed(chatId, threadId) && !isAdminChat(chatId)) return;
+      if (!isAllowed(chatId, threadId) && !isAdminChat(chatId)) {
+        // Формат 'callback dropped' парсится скриптом scripts/far-bot-metrics.sh
+        log('callback dropped', { chat: chatId, thread: threadId, data: cb.data, reason: 'not_allowed' });
+        return;
+      }
       const ctx = {
         chatId,
         threadId,
