@@ -464,6 +464,18 @@ async function main() {
     // после подключения чат "известный": команды работают
     await bot.handleUpdate(msg('/farhelp', null, -777));
     check('known chat after approve', tg.calls.length > before && tg.texts().some((t) => t.includes('маяками')));
+
+    // regression: callback из чата, которого нет в ALLOWED_TOPICS, но который
+    // подключён через allow (allowed:true в реестре), не должен отбрасываться гейтингом
+    await bot.handleUpdate(msg('/farcreate', null, -777));
+    const createCb = cbq('create_Исследование');
+    createCb.callback_query.message.chat.id = -777;
+    createCb.callback_query.message.message_thread_id = null;
+    await bot.handleUpdate(createCb);
+    check(
+      'callback works in approved chat not listed in ALLOWED_TOPICS',
+      tg.calls.some((c) => c.method === 'editMessageText' && c.body.chatId === '-777' && c.body.text === 'Введи ник'),
+    );
   }
 
   {
