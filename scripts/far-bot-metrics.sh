@@ -57,7 +57,7 @@ contour_json() { # name service appdir
 
   printf ',"%s":{"service":"%s","uptime_sec":%s,"updates_24h":%s,"callbacks_dropped_24h":%s,"errors_1h":%s,"errors_24h":%s}' \
     "$name" "$active" "$uptime" \
-    "$(count_lines "$svc" "$LOGS_SINCE_24H" ' update \{')" \
+    "$(count_lines "$svc" "$LOGS_SINCE_24H" ' update {')" \
     "$(count_lines "$svc" "$LOGS_SINCE_24H" ' callback dropped ')" \
     "$(errors_json "$svc" "$LOGS_SINCE_1H")" "$(errors_json "$svc" "$LOGS_SINCE_24H")"
 }
