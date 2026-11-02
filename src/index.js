@@ -121,6 +121,9 @@ if (config.adminChatId && existsSync(config.deployNotifyFile)) {
     alertAdmin(`deploy notify failed: ${e}`);
   }
 }
+// Heartbeat для мониторинга: раз в минуту в журнал, внешний скрипт следит за свежестью
+setInterval(() => log('heartbeat', { uptimeSec: Math.round(process.uptime()) }), 60_000).unref?.();
+
 // Одиночные сетевые флики (fetch failed в getUpdates) не алертим:
 // только 3+ подряд идущих ошибок опроса — признак реальной поломки сети/токена.
 let consecutivePollErrors = 0;
