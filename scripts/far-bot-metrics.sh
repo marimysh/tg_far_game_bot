@@ -32,7 +32,8 @@ contour_json() { # name service appdir
   err_1h=$(count_re "$blk" ' ERROR ')
   # telegram: подавленные "poll error" + реальные fetch failed со стеком tg.js
   tg_1h=$(( $(count_re "$blk" 'poll error') + $(printf '%s\n' "$blk" | grep -A3 ' ERROR .*fetch failed' | grep -c 'src/tg\.js' 2>/dev/null || true) ))
-  sheets_1h=$(printf '%s\n' "$blk" | grep ' ERROR ' | grep -c 'Sheets API' 2>/dev/null || true)
+  # sheets: явные ответы Sheets API (500/502 и т.п.) + обрывы чтения таблицы (fetch failed)
+  sheets_1h=$(printf '%s\n' "$blk" | grep ' ERROR ' | grep -cE 'Sheets API|digest read error' 2>/dev/null || true)
 
   err_24h=$(journalctl -u "$svc" --since "$LOGS_SINCE_24H" --no-pager 2>/dev/null | grep -c ' ERROR ' 2>/dev/null || true)
 
