@@ -7,11 +7,21 @@
 #   telegram — HTTP-ответ от Bot API (Telegram ... failed: HTTP ...);
 #   sheets   — HTTP-ответ Google Sheets API (Sheets API ... failed: HTTP ...);
 #   internal — всё остальное (ошибки логики бота, валидации и пр.).
+# События (не ошибки), считаемые отдельно:
+#   updates_24h            — строки 'update {...}': входящие сообщения/callback-и за сутки
+#                            (нагрузка: сколько запросов в сутки приходит к боту);
+#   callbacks_dropped_24h  — строки 'callback dropped {...}': нажатия кнопок, отброшенные
+#                            гейтингом/состоянием FSM (not_allowed|state_mismatch|unknown).
 # Формат пригоден и для zabbix UserParameter в будущем.
 set -u
 
 LOGS_SINCE_1H="1 hour ago"
 LOGS_SINCE_24H="24 hours ago"
+
+# Счётчик строк журнала по regex-шаблону (события, не ошибки)
+count_lines() { # service since pattern
+  journalctl -u "$1" --since "$2" --no-pager 2>/dev/null | awk -v pat="$3" '$0 ~ pat {n++} END {print n+0}'
+}
 
 # Один проход по журналу: "net tg sheets internal"
 classify() { # service since
@@ -45,8 +55,11 @@ contour_json() { # name service appdir
     uptime=0
   fi
 
-  printf ',"%s":{"service":"%s","uptime_sec":%s,"errors_1h":%s,"errors_24h":%s}' \
-    "$name" "$active" "$uptime" "$(errors_json "$svc" "$LOGS_SINCE_1H")" "$(errors_json "$svc" "$LOGS_SINCE_24H")"
+  printf ',"%s":{"service":"%s","uptime_sec":%s,"updates_24h":%s,"callbacks_dropped_24h":%s,"errors_1h":%s,"errors_24h":%s}' \
+    "$name" "$active" "$uptime" \
+    "$(count_lines "$svc" "$LOGS_SINCE_24H" ' update \{')" \
+    "$(count_lines "$svc" "$LOGS_SINCE_24H" ' callback dropped ')" \
+    "$(errors_json "$svc" "$LOGS_SINCE_1H")" "$(errors_json "$svc" "$LOGS_SINCE_24H")"
 }
 
 gw=$(ip route show default 2>/dev/null | awk 'NR==1 {print $3}')
