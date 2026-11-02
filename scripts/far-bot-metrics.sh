@@ -1,26 +1,43 @@
 #!/usr/bin/env bash
 # Сбор метрик контуров far-bot для дашборда. Вывод: JSON в stdout.
 # Запускается на VDS от пользователя с доступом к journalctl (marimysh), sudo не нужен.
-# Классификация ошибок из journal за окно:
-#   telegram — сбои опроса/отправки Telegram (pollLoop, стек src/tg.js, "poll error")
-#   sheets   — ошибки Google Sheets API ("Sheets API" в тексте ошибки)
-#   network  — потери пинга до шлюза (или 1.1.1.1) на момент замера
-# Формат пригоден и для zabbix UserParameter (Low-level discovery не требуется).
+# Ошибки классифицируются строго в один тип (приоритет сверху вниз):
+#   network  — нет ответа от хоста вообще (fetch failed): не отличить, кто не ответил,
+#              это сетевой уровень (и Telegram, и Google могли не ответить);
+#   telegram — HTTP-ответ от Bot API (Telegram ... failed: HTTP ...);
+#   sheets   — HTTP-ответ Google Sheets API (Sheets API ... failed: HTTP ...);
+#   internal — всё остальное (ошибки логики бота, валидации и пр.).
+# Формат пригоден и для zabbix UserParameter в будущем.
 set -u
 
 LOGS_SINCE_1H="1 hour ago"
 LOGS_SINCE_24H="24 hours ago"
 
-count_re() { # text pattern -> count
-  printf '%s\n' "$1" | grep -c "$2" 2>/dev/null || true
+# Один проход по журналу: "net tg sheets internal"
+classify() { # service since
+  journalctl -u "$1" --since "$2" --no-pager 2>/dev/null | awk '
+    /poll error/ && /fetch failed/ { net++; next }
+    / ERROR / {
+      if (/fetch failed/) { net++; next }
+      if (/Telegram/)     { tg++; next }
+      if (/Sheets API/ || /digest read error/ || /sheets\.js/) { sheets++; next }
+      internal++; next
+    }
+    END { printf "%d %d %d %d", net+0, tg+0, sheets+0, internal+0 }'
+}
+
+errors_json() { # service since
+  read -r net tg sheets internal <<<"$(classify "$1" "$2")"
+  local total=$(( net + tg + sheets + internal ))
+  printf '{"total":%s,"internal":%s,"telegram":%s,"sheets":%s,"network":%s}' \
+    "$total" "$internal" "$tg" "$sheets" "$net"
 }
 
 contour_json() { # name service appdir
   local name=$1 svc=$2 appdir=$3
-  local active uptime blk err_1h err_24h tg_1h sheets_1h
+  local active uptime enter_ts
 
   active=$(systemctl is-active "$svc" 2>/dev/null || echo unknown)
-  local enter_ts
   enter_ts=$(systemctl show -p ActiveEnterTimestamp --value "$svc" 2>/dev/null || true)
   if [ "$active" = "active" ] && [ -n "$enter_ts" ] && [ "$enter_ts" != "n/a" ]; then
     uptime=$(( $(date +%s) - $(date -d "$enter_ts" +%s 2>/dev/null || echo 0) ))
@@ -28,17 +45,8 @@ contour_json() { # name service appdir
     uptime=0
   fi
 
-  blk=$(journalctl -u "$svc" --since "$LOGS_SINCE_1H" --no-pager 2>/dev/null)
-  err_1h=$(count_re "$blk" ' ERROR ')
-  # telegram: подавленные "poll error" + реальные fetch failed со стеком tg.js
-  tg_1h=$(( $(count_re "$blk" 'poll error') + $(printf '%s\n' "$blk" | grep -A3 ' ERROR .*fetch failed' | grep -c 'src/tg\.js' 2>/dev/null || true) ))
-  # sheets: явные ответы Sheets API (500/502 и т.п.) + обрывы чтения таблицы (fetch failed)
-  sheets_1h=$(printf '%s\n' "$blk" | grep ' ERROR ' | grep -cE 'Sheets API|digest read error' 2>/dev/null || true)
-
-  err_24h=$(journalctl -u "$svc" --since "$LOGS_SINCE_24H" --no-pager 2>/dev/null | grep -c ' ERROR ' 2>/dev/null || true)
-
-  printf ',"%s":{"service":"%s","uptime_sec":%s,"errors_1h":%s,"errors_24h":%s,"telegram_errors_1h":%s,"sheets_errors_1h":%s}' \
-    "$name" "$active" "$uptime" "$err_1h" "$err_24h" "$tg_1h" "$sheets_1h"
+  printf ',"%s":{"service":"%s","uptime_sec":%s,"errors_1h":%s,"errors_24h":%s}' \
+    "$name" "$active" "$uptime" "$(errors_json "$svc" "$LOGS_SINCE_1H")" "$(errors_json "$svc" "$LOGS_SINCE_24H")"
 }
 
 gw=$(ip route show default 2>/dev/null | awk 'NR==1 {print $3}')
