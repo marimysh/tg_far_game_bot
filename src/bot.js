@@ -31,7 +31,11 @@ export function createBot({ tg, getQueueApi, chats, store, config, log, createCh
 
   function isAllowed(chatId, threadId) {
     if (config.allowedTopics.includes('*')) return true;
-    return config.allowedTopics.includes(topicKey(chatId, threadId));
+    if (config.allowedTopics.includes(topicKey(chatId, threadId))) return true;
+    // Чат, прошедший согласование (allow из админ-чата), живёт в реестре с
+    // allowed: true. Без этой ветки каждый новый чат «полуработал»: сообщения
+    // доходили, а кнопки молча отбрасывались до ручной правки .env и рестарта.
+    return chats.get(chatId, threadId)?.allowed === true;
   }
 
   function isAdminChat(chatId) {
